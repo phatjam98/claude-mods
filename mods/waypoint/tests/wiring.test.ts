@@ -412,3 +412,29 @@ test('openOnStart off: a resumed plan does not open the pane', { options: { open
   expect(w.reads).toEqual([PLAN])
   expect(w.opens).toHaveLength(0)
 })
+
+test('the pane opens 48 columns wide by default, keeping rows 10', async ($, on) => {
+  const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  await command($, 'use purring-origami')
+  expect(w.opens).toHaveLength(1)
+  expect(w.opens[0]).toMatchObject({ id: 'waypoint', rows: 10, columns: 48 })
+})
+
+test('paneColumns sets the docked width', { options: { paneColumns: 60 } }, async ($, on) => {
+  const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  await command($, 'use purring-origami')
+  expect(w.opens[0]).toMatchObject({ rows: 10, columns: 60 })
+})
+
+test('paneColumns 0 leaves the width to the engine', { options: { paneColumns: 0 } }, async ($, on) => {
+  const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  await command($, 'use purring-origami')
+  expect(w.opens).toHaveLength(1)
+  expect('columns' in w.opens[0]).toBe(false)
+})
+
+test('paneColumns is clamped to 40..200 whole columns', { options: { paneColumns: 12.7 } }, async ($, on) => {
+  const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  await command($, 'use purring-origami')
+  expect(w.opens[0]).toMatchObject({ columns: 40 })
+})

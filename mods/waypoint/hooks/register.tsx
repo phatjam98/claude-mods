@@ -86,6 +86,8 @@ type Cfg = {
   band: boolean
   statusLine: boolean
   layout: Layout
+  /** Docked width asked of the engine; undefined leaves it the engine's. */
+  paneColumns: number | undefined
   planDir: string
   planPollMs: number
   resumeDays: number
@@ -99,6 +101,12 @@ const num = (v: unknown, d: number): number => {
   return Number.isFinite(n) ? n : d
 }
 
+/** 0 (or less) hands the width to the engine; otherwise 40..200 whole columns. */
+const paneColumns = (v: unknown): number | undefined => {
+  const n = num(v, 48)
+  return n <= 0 ? undefined : Math.min(200, Math.max(40, Math.floor(n)))
+}
+
 export function parseOptions(o: Record<string, unknown>): Cfg {
   const layout = o.layout === 'compact' || o.layout === 'wide' ? o.layout : 'auto'
   const pp = num(o.planPollSeconds, 5)
@@ -107,6 +115,7 @@ export function parseOptions(o: Record<string, unknown>): Cfg {
     band: bool(o.band, true),
     statusLine: bool(o.statusLine, true),
     layout,
+    paneColumns: paneColumns(o.paneColumns),
     planDir: typeof o.planDir === 'string' && o.planDir.trim() !== '' ? o.planDir.trim() : '~/.claude/plans',
     planPollMs: pp <= 0 ? 0 : Math.max(2, pp) * 1000,
     resumeDays: Math.max(0, num(o.resumeDays, 14)),
@@ -298,7 +307,12 @@ async function paneTick($: EngineInterface, gen: number): Promise<void> {
 
 async function openPane($: EngineInterface): Promise<boolean> {
   try {
-    const r = await $.ui.open({ id: PANE_ID, title: PANE_TITLE, rows: 10 })
+    const r = await $.ui.open({
+      id: PANE_ID,
+      title: PANE_TITLE,
+      rows: 10,
+      ...(cfg.paneColumns === undefined ? {} : { columns: cfg.paneColumns }),
+    })
     await setUi($, { paneOpen: true, isPlaced: r.isPlaced })
     return r.isPlaced
   } catch {

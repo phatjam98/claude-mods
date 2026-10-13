@@ -164,7 +164,7 @@ test('PR section: wide lists PRs needing attention; compact shows one line', asy
   await w.clock.advance(750)
   for (const surface of SURFACES) {
     let ui = await mountPane($, surface, 120)
-    expect(await ui.find({ type: 'Text', text: /^  Pull requests · $/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Pull requests · $/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '1 needs you' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^feat\(phase4\.7\+4\.8\): NAB/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /ci failed/ })).toBeDefined()
@@ -275,7 +275,7 @@ test('handoff: wide section with summary ≤ 4 lines and items; compact one-line
   await handoff($)
   for (const surface of SURFACES) {
     let ui = await mountPane($, surface, 92)
-    expect(await ui.find({ type: 'Text', text: /^  Waiting on you · 0s ago$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Waiting on you · 0s ago$/ })).toBeDefined()
     const summary = await ui.findAll({ type: 'Text', text: /^  (PR #1 is verified|.*merge|.*marketplace|.*README)/ })
     expect(summary.length >= 2 && summary.length <= 4).toBe(true)
     expect(summary.every((t: { text: string }) => Array.from(t.text).length <= 92)).toBe(true)
@@ -303,7 +303,7 @@ test('PR header with no PR needing you: `1 open · none need you`', async ($, on
   await $.tool.call({ tool: 'Bash', tool_use_id: 'b', command: 'gh pr view 13' } as any)
   await w.clock.advance(750)
   const ui = await mountPane($, 'terminal', 100)
-  expect(await ui.find({ type: 'Text', text: /^  Pull requests · 1 open · $/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Pull requests · 1 open · $/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'none need you' })).toBeDefined()
   await ui.unmount()
 })
@@ -379,6 +379,131 @@ test('handoff from an earlier session: the wide header says so', async ($, on) =
   await start($)
   await planMode($)
   const ui = await mountPane($, 'terminal', 100)
-  expect(await ui.find({ type: 'Text', text: /^  Waiting on you · from an earlier session · 1h ago$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Waiting on you · from an earlier session · 1h ago$/ })).toBeDefined()
   await ui.unmount()
+})
+
+// --- 0.2: section rules and the current step's children one per line ---
+
+const SIX_KIDS = [
+  '- [x] README, CHANGELOG, marketplace entry',
+  '- [x] CI workflow green on a clean runner',
+  '- [x] draft PR opened against main',
+  '- [-] a screenshot in the README',
+  '- [!] mark PR #13 ready and merge (after WP6)',
+  '- [ ] tag waypoint--v0.1.0 and publish',
+].join('\n')
+const NINE6 = NINE.replace('- [x] alpha-child\n- [ ] beta-child', SIX_KIDS)
+
+async function mountAt($: any, cols: number, rows: number) {
+  const ui = await $.ui.mount({
+    plugin: 'waypoint',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'waypoint',
+    props: { bodyColumns: cols, placement: 'dock', scroll: { bodyRows: rows } } as any,
+  })
+  return { ui, text: plain(await ui.drawn(), cols) }
+}
+
+test('wide rules: section headers are rules exactly W wide; the footer has its own rule; children one per line at 30 rows', async ($, on) => {
+  const w = world(on, { [PLAN]: NINE6 })
+  await start($)
+  await planMode($)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b', command: 'gh pr view 13' } as any)
+  await w.clock.advance(750)
+  await handoff($)
+  const { ui, text } = await mountAt($, 92, 30)
+  if (DUMP) (globalThis as any).console?.log(`--- 92 columns, 30 rows ---\n${text.join('\n')}`)
+  expect(text.length <= 30).toBe(true)
+  const prRule = text.find(l => l.startsWith('── Pull requests'))
+  const hoRule = text.find(l => l.startsWith('── Waiting on you'))
+  expect(prRule !== undefined && /─$/.test(prRule) && Array.from(prRule).length).toBe(92)
+  expect(hoRule !== undefined && /─$/.test(hoRule) && Array.from(hoRule).length).toBe(92)
+  const footerRule = text.findIndex(l => l === '─'.repeat(92))
+  expect(footerRule).toBe(text.length - 2)
+  expect(text[footerRule - 1]).toBe(' ')
+  // Each child on its own row, at the title column (5 + shortWidth 3 + 2), in full.
+  const pad = ' '.repeat(10)
+  expect(text.filter(l => l.startsWith(pad + '✓ ') || l.startsWith(pad + '· ') || l.startsWith(pad + '! ') || l.startsWith(pad + '– ')).length).toBe(6)
+  expect(text).toContain(`${pad}✓ README, CHANGELOG, marketplace entry`)
+  expect(text).toContain(`${pad}! mark PR #13 ready and merge (after WP6)`)
+  expect(await ui.find({ type: 'Text', text: /a screenshot in the README/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('wide rules: a tight budget draws the children in one row, and drops the gaps with the footer rule', async ($, on) => {
+  const w = world(on, { [PLAN]: NINE6 })
+  await start($)
+  await planMode($)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b', command: 'gh pr view 13' } as any)
+  await w.clock.advance(750)
+  await handoff($)
+  const { ui, text } = await mountAt($, 92, 14)
+  expect(text.length <= 14).toBe(true)
+  expect(text.some(l => l.includes('README, CHA') && l.includes('CI workflow'))).toBe(true)
+  expect(text.includes('─'.repeat(92))).toBe(false)
+  expect(text.includes(' ')).toBe(false)
+  await ui.unmount()
+})
+
+// --- 0.2: the narrow dock (48 columns): the sectioned layout, adapted ---
+
+test('narrow dock at 48 columns: sectioned layout, no PR buttons, two-row footer, every row ≤ 48 cells', async ($, on) => {
+  const w = world(on, { [PLAN]: NINE6 })
+  await start($)
+  await planMode($)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b', command: 'gh pr view 13' } as any)
+  await w.clock.advance(750)
+  await handoff($)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({
+      plugin: 'waypoint',
+      surface,
+      component: 'Pane',
+      requestId: 'waypoint',
+      props: { bodyColumns: 48, placement: 'dock', scroll: { bodyRows: 40 } } as any,
+    })
+    const text = plain(await ui.drawn(), 48)
+    if (DUMP) (globalThis as any).console?.log(`--- ${surface} 48 columns, 40 rows ---\n${text.join('\n')}`)
+    expect(text.filter(l => Array.from(l).length > 48)).toEqual([])
+    expect(await ui.find({ type: 'Text', text: /^ *WP3 · 3\/9 · $/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '33%' })).toBeDefined()
+    const prRule = text.find(l => l.startsWith('── Pull requests · 1 needs you'))
+    expect(prRule !== undefined && Array.from(prRule).length).toBe(48)
+    const hoRule = text.find(l => l.startsWith('── Waiting on you · 0s ago'))
+    expect(hoRule !== undefined && Array.from(hoRule).length).toBe(48)
+    expect(text.includes('─'.repeat(48))).toBe(true)
+    expect(await ui.find({ type: 'Button', key: 'copy-github.com/phatjam98/eventhorizon#13' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'untrack-github.com/phatjam98/eventhorizon#13' })).toBeUndefined()
+    expect(text.some(l => /^ ✗ #13 feat\(phase4\.7\+4\.8\)/.test(l) || /^ . #13 /.test(l))).toBe(true)
+    // One-space indents; children at the title column (1 + 1 + 1 + 3 + 1).
+    expect(text.some(l => l.startsWith(' ▶ WP3 Draw the pane'))).toBe(true)
+    expect(text).toContain(`${' '.repeat(7)}✓ README, CHANGELOG, marketplace entry`)
+    expect(text.some(l => l.startsWith(' ! decision Mark PR #13 ready and merge?'))).toBe(true)
+    // The footer: the path row, then the hotkeys on their own row.
+    expect(text.at(-2)).toMatch(/^ ~\/\.claude\/plans\/purring-origami\.md · changed 1…$/)
+    expect(Array.from(text.at(-2)!).length).toBe(48)
+    expect(text.at(-1)).toBe(' r refresh · p path · c close')
+    await ui.unmount()
+  }
+})
+
+test('narrow dock at 48 columns, 10..30 rows: drawn rows never exceed the budget or 48 cells; current step and both sections stay', async ($, on) => {
+  const w = world(on, { [PLAN]: NINE6 }, () => ({ exitCode: 1, stdout: '', stderr: stderr.ghAuth }))
+  await start($)
+  await planMode($)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b', command: 'gh pr view 13' } as any)
+  await w.clock.advance(750)
+  await handoff($)
+  for (let rows = 10; rows <= 30; rows++) {
+    const { ui, text } = await mountAt($, 48, rows)
+    if (DUMP) (globalThis as any).console?.log(`--- 48 columns, ${rows} rows ---\n${text.join('\n')}`)
+    expect({ rows, drawn: text.length <= rows }).toEqual({ rows, drawn: true })
+    expect({ rows, over: text.filter(l => Array.from(l).length > 48) }).toEqual({ rows, over: [] })
+    expect(text.some(l => /▶ WP3/.test(l))).toBe(true)
+    expect(text.some(l => /waiting on you/i.test(l))).toBe(true)
+    expect(text.some(l => /#13/.test(l))).toBe(true)
+    await ui.unmount()
+  }
 })

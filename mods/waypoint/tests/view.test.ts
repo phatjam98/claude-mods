@@ -4,15 +4,19 @@ import {
   bandText,
   bar,
   buildBandModel,
+  childLinesCost,
   buildPaneModel,
   chooseLayout,
   fitSteps,
   fmtAgo,
   headerLine,
+  isNarrow,
+  narrowPrHead,
   homePath,
   MAX_PR_ROWS,
   paneRows,
   resolveRef,
+  ruleTail,
   wrapSummary,
   shorten,
   statusText,
@@ -262,8 +266,15 @@ test('fitSteps wide: children row follows the current step only', () => {
 })
 
 test('chooseLayout thresholds', () => {
-  expect(chooseLayout('auto', 59, 'dock')).toBe('compact')
-  expect(chooseLayout('auto', 60, 'dock')).toBe('wide')
+  expect(chooseLayout('auto', 43, 'dock')).toBe('compact')
+  expect(chooseLayout('auto', 44, 'dock')).toBe('wide')
+  expect(isNarrow(chooseLayout('auto', 44, 'dock'), 44)).toBe(true)
+  expect(chooseLayout('auto', 63, 'dock')).toBe('wide')
+  expect(isNarrow('wide', 63)).toBe(true)
+  expect(chooseLayout('auto', 64, 'dock')).toBe('wide')
+  expect(isNarrow('wide', 64)).toBe(false)
+  expect(isNarrow('compact', 48)).toBe(false)
+  expect(chooseLayout('auto', 48, 'inline')).toBe('compact')
   expect(chooseLayout('auto', 120, 'inline')).toBe('compact')
   expect(chooseLayout('auto', 120, undefined)).toBe('wide')
   expect(chooseLayout('wide', 40, 'inline')).toBe('wide')
@@ -518,4 +529,66 @@ test('paneRows counts the non-plan states with their handoff line', () => {
   expect(paneRows(buildPaneModel(input({ tracked: null, snap: null })))).toBe(2)
   expect(paneRows(buildPaneModel(input({ tracked: null, snap: null, handoff: ho })))).toBe(3)
   expect(paneRows(buildPaneModel(input({ snap: snap([], { mode: 'none' }), handoff: ho })))).toBe(4)
+})
+
+test('ruleTail: one space then ─ to exactly the width; empty when there is no room', () => {
+  const head = '── Pull requests · 1 open · none need you'
+  expect(Array.from(head + ruleTail(head, 92)).length).toBe(92)
+  expect(ruleTail(head, 92).startsWith(' ─')).toBe(true)
+  expect(ruleTail(head, Array.from(head).length + 1)).toBe('')
+  expect(ruleTail('x'.repeat(100), 92)).toBe('')
+})
+
+test('childLinesCost: one row per child up to 8, then one +n more row', () => {
+  expect([0, 1, 6, 8, 9, 20].map(childLinesCost)).toEqual([0, 1, 6, 8, 9, 9])
+})
+
+test('children: one per line at budget 30 (9 steps, 6 children); one inline row at a tight budget; counted in paneRows', () => {
+  const s = snap(NINE)
+  const kids: SubItem[] = Array.from({ length: 6 }, (_, i) => ({ text: `child ${i}`, status: i < 2 ? 'done' : 'pending', line: i + 1 }))
+  s.steps[2] = step(2, 'active', kids)
+  const roomy = buildPaneModel(input({ snap: s, rows: 30 }))
+  if (roomy.kind !== 'plan') throw new Error(roomy.kind)
+  const k = roomy.rows.find(r => r.kind === 'children')
+  expect(k).toEqual({ kind: 'children', items: kids, perLine: true })
+  expect(roomy.rows.filter(r => r.kind === 'step').length).toBe(9)
+  // header 2 + gap + 9 steps + 6 children + gap + footer rule + footer
+  expect(paneRows(roomy)).toBe(2 + 1 + 9 + 6 + 3)
+  const tight = buildPaneModel(input({ snap: s, rows: 12 }))
+  if (tight.kind !== 'plan') throw new Error(tight.kind)
+  expect(tight.rows.find(r => r.kind === 'children')).toEqual({ kind: 'children', items: kids, perLine: false })
+  expect(tight.gaps).toBe(true)
+  expect(paneRows(tight) <= 12).toBe(true)
+  // Over 8 children: 8 rows and a `+n more` row.
+  const many: SubItem[] = Array.from({ length: 11 }, (_, i) => ({ text: `c${i}`, status: 'pending', line: i + 1 }))
+  s.steps[2] = step(2, 'active', many)
+  const big = buildPaneModel(input({ snap: s, rows: 40 }))
+  if (big.kind !== 'plan') throw new Error(big.kind)
+  expect(paneRows(big)).toBe(2 + 1 + 9 + 9 + 3)
+  expect(fitSteps(s.steps, 2, 10, 'wide', true).some(r => r.kind === 'children' && !r.perLine)).toBe(true)
+  expect(fitSteps(s.steps, 2, 18, 'wide', true).some(r => r.kind === 'children' && r.perLine)).toBe(true)
+})
+
+test('footer rule: counted with the gaps, dropped with them', () => {
+  const m = buildPaneModel(input({ rows: 40 }))
+  if (m.kind !== 'plan') throw new Error(m.kind)
+  expect(m.gaps).toBe(true)
+  expect(paneRows(m)).toBe(2 + 1 + 9 + 3)
+  expect(paneRows({ ...m, gaps: false })).toBe(2 + 9 + 1)
+})
+
+test('narrow (44–63 columns): header `WP2 · 2/9 · 22%`; PR head drops `none need you` and `n other`, then `polled` when the rule would not fit', () => {
+  const s = snap(NINE)
+  expect(headerLine(s, 48, true).right).toBe('WP2 · 2/9 · 22%')
+  expect(headerLine(snap(['done', 'done']), 48, true).right).toBe('done · 2/2 · 100%')
+  expect(narrowPrHead(0, 1, ' · polled 3s ago', 48)).toEqual({ before: ' · 1 open', need: '', hot: false, after: ' · polled 3s ago' })
+  expect(narrowPrHead(2, 3, ' · polled 3s ago', 48)).toEqual({ before: ' · ', need: '2 need you', hot: true, after: ' · polled 3s ago' })
+  expect(narrowPrHead(12, 13, ' · polled 59m ago', 44).after).toBe('')
+  const m = buildPaneModel(input({ bodyColumns: 48, rows: 40 }))
+  if (m.kind !== 'plan') throw new Error(m.kind)
+  expect([m.layout, m.narrow]).toEqual(['wide', true])
+  // header 2 + gap + 9 steps + gap + footer rule + path row + hotkey row
+  expect(paneRows(m)).toBe(2 + 1 + 9 + 4)
+  const roomy = buildPaneModel(input({ bodyColumns: 64, rows: 40 }))
+  expect(roomy.kind === 'plan' && roomy.narrow).toBe(false)
 })

@@ -27,7 +27,8 @@ export type Row =
   | { kind: 'step'; step: Step; isCurrent: boolean }
   | { kind: 'done-summary'; count: number; shorts: string[] }
   | { kind: 'more'; count: number; position: 'before' | 'after' }
-  | { kind: 'children'; items: SubItem[] }
+  /** The current step's checkbox items: one row (`perLine` false), or one row each (wide, when the rows allow). */
+  | { kind: 'children'; items: SubItem[]; perLine: boolean }
 
 export type RecentPlan = { name: string; path: string; mtimeMs: number }
 export type RecentRow = { name: string; path: string; ago: string }
@@ -70,6 +71,8 @@ export type PaneModel =
   | {
       kind: 'plan'
       layout: 'compact' | 'wide'
+      /** Wide at 44–63 columns: one-space indents, no PR buttons, the footer on two rows. */
+      narrow: boolean
       width: number
       header: { title: string; right: string; lead: string; pct: string }
       bar: BarModel
@@ -111,11 +114,25 @@ export type PaneInput = {
 
 export const MIN_WIDTH = 40
 export const WIDE_MIN_COLUMNS = 60
+/** Auto layout: the sectioned (wide) layout from this many columns in a dock; compact below. */
+export const SECTIONED_MIN_COLUMNS = 44
+/** Below this the wide layout is narrow. */
+export const NARROW_BELOW = 64
 export const INLINE_ROW_CAP = 8
 export const MAX_PR_ROWS = 5
 export const MAX_RECENT = 5
 export const MAX_HANDOFF_ITEMS = 5
 export const MAX_SUMMARY_LINES = 4
+export const MAX_CHILD_LINES = 8
+
+/** Rows the current step's children take drawn one per line: up to 8, then one `+n more` row. */
+export const childLinesCost = (n: number): number => Math.min(n, MAX_CHILD_LINES) + (n > MAX_CHILD_LINES ? 1 : 0)
+
+/** The dim `─` tail of a section rule: one space, then `─` to exactly `width` after `used` (empty when no room). */
+export function ruleTail(used: string, width: number): string {
+  const room = Math.floor(width) - Array.from(used).length - 1
+  return room >= 1 ? ' ' + '─'.repeat(room) : ''
+}
 
 const GLYPHS: Record<StepStatus, string> = { done: '✓', active: '▶', pending: '·', blocked: '!', skipped: '–' }
 const COLORS: Record<StepStatus, StatusColor> = {
@@ -148,11 +165,14 @@ export function fmtAgo(now: number, at: number): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
-/** auto → compact when inline or narrower than 60 columns, else wide. */
+/** auto → compact when inline or narrower than 44 columns, else wide (narrow below 64, see `isNarrow`). */
 export function chooseLayout(pref: Layout, bodyColumns: number, placement: 'dock' | 'inline' | undefined): 'compact' | 'wide' {
   if (pref !== 'auto') return pref
-  return placement === 'inline' || bodyColumns < WIDE_MIN_COLUMNS ? 'compact' : 'wide'
+  return placement === 'inline' || bodyColumns < SECTIONED_MIN_COLUMNS ? 'compact' : 'wide'
 }
+
+/** The wide layout's narrow variant: under 64 columns. */
+export const isNarrow = (layout: 'compact' | 'wide', width: number): boolean => layout === 'wide' && width < NARROW_BELOW
 
 /** Rows the pane may use: the engine's body rows, else viewport rows less 4 (at least 6). */
 export function rowBudget(bodyRows: number | undefined, viewportRows: number | undefined): number {
@@ -189,18 +209,18 @@ const currentStep = (snap: PlanSnapshot): Step | undefined =>
 
 /**
  * Header: `⚑ <title>` cut to fit, and the progress on the right: `5/6 83%`
- * narrow, `WP5 · 5 of 6 · 83%` wide (`done · …` when complete). `lead` + `pct` = `right`.
+ * under 60 columns, `WP5 · 5 of 6 · 83%` wide, `WP5 · 5/6 · 83%` in the narrow
+ * wide layout (`done · …` when complete). `lead` + `pct` = `right`.
  */
-export function headerLine(snap: PlanSnapshot, width: number): { title: string; right: string; lead: string; pct: string } {
+export function headerLine(snap: PlanSnapshot, width: number, narrow = false): { title: string; right: string; lead: string; pct: string } {
   const c = snap.counts
   const pct = `${snap.percent}%`
   const cur = currentStep(snap)
+  const where = cur !== undefined ? `${cur.short} · ` : finished(c) >= c.total && c.total > 0 ? 'done · ' : ''
   let lead: string
-  if (width < WIDE_MIN_COLUMNS) lead = `${finished(c)}/${c.total} `
-  else {
-    const where = cur !== undefined ? `${cur.short} · ` : finished(c) >= c.total && c.total > 0 ? 'done · ' : ''
-    lead = `${where}${finished(c)} of ${c.total} · `
-  }
+  if (narrow) lead = `${where}${finished(c)}/${c.total} · `
+  else if (width < WIDE_MIN_COLUMNS) lead = `${finished(c)}/${c.total} `
+  else lead = `${where}${finished(c)} of ${c.total} · `
   const right = lead + pct
   const title = shorten(`⚑ ${snap.displayTitle}`, Math.max(4, width - Array.from(right).length - 2))
   return { title, right, lead, pct }
@@ -296,18 +316,24 @@ export function handoffBandText(snap: PlanSnapshot | null, handoff: Handoff): st
  * The step rows for `rows` lines: the current step always visible, leading
  * finished steps collapsed into one summary row when everything does not fit,
  * and a `+n more` row when steps remain below. In `compact` the `more` row is
- * drawn on the last step's line, so it costs no line of its own.
+ * drawn on the last step's line, so it costs no line of its own. In `wide` the
+ * current step's children follow it, one per line when `perLine` and they fit,
+ * else in one row, else not at all.
  */
-export function fitSteps(steps: Step[], currentIndex: number | null, rows: number, layout: 'compact' | 'wide'): Row[] {
+export function fitSteps(steps: Step[], currentIndex: number | null, rows: number, layout: 'compact' | 'wide', perLine = false): Row[] {
   const n = steps.length
   if (n === 0) return []
   const budget = Math.max(1, Math.floor(rows))
   const cur = Math.min(n - 1, Math.max(0, currentIndex ?? n - 1))
   const curStep = steps[cur]
-  const childCost = layout === 'wide' && currentIndex !== null && curStep !== undefined && curStep.children.length > 0 ? 1 : 0
+  const hasKids = layout === 'wide' && currentIndex !== null && curStep !== undefined && curStep.children.length > 0
+  type Kids = { cost: number; perLine: boolean | null }
+  const options: Kids[] = !hasKids
+    ? [{ cost: 0, perLine: null }]
+    : [...(perLine ? [{ cost: childLinesCost(curStep.children.length), perLine: true }] : []), { cost: 1, perLine: false }, { cost: 0, perLine: null }]
   const moreCost = layout === 'compact' ? 0 : 1
 
-  const emit = (s: number, e: number, withChildren: boolean): Row[] => {
+  const emit = (s: number, e: number, kids: Kids): Row[] => {
     const out: Row[] = []
     if (s > 0) {
       const before = steps.slice(0, s)
@@ -322,15 +348,13 @@ export function fitSteps(steps: Step[], currentIndex: number | null, rows: numbe
       if (step === undefined) continue
       const isCurrent = currentIndex !== null && i === cur
       out.push({ kind: 'step', step, isCurrent })
-      if (isCurrent && withChildren) out.push({ kind: 'children', items: step.children })
+      if (isCurrent && kids.perLine !== null) out.push({ kind: 'children', items: step.children, perLine: kids.perLine })
     }
     if (e < n) out.push({ kind: 'more', count: n - e, position: 'after' })
     return out
   }
 
-  if (n + childCost <= budget) return emit(0, n, childCost > 0)
-
-  // Children are dropped before the window shrinks to the current step alone.
+  // Children go to one row, then are dropped, before the window shrinks to the current step alone.
   // A window that cannot hold one step plus its `more` row is not tried (-1).
   const windowEnd = (s: number, kids: number): number => {
     const room = budget - (s > 0 ? 1 : 0) - kids
@@ -341,18 +365,19 @@ export function fitSteps(steps: Step[], currentIndex: number | null, rows: numbe
   let lead = 0
   while (lead < cur && isClosed(steps[lead])) lead++
   const starts = [lead >= 2 ? lead : 0, Math.max(0, cur - 1), cur]
-  for (const kids of childCost > 0 ? [childCost, 0] : [0]) {
+  for (const kids of options) {
+    if (n + kids.cost <= budget) return emit(0, n, kids)
     for (const s of starts) {
       if (s > cur) continue
-      const e = windowEnd(s, kids)
-      if (e > cur) return emit(s, e, kids > 0)
+      const e = windowEnd(s, kids.cost)
+      if (e > cur) return emit(s, e, kids)
     }
   }
   // One or two rows: the current step, then what follows (else what precedes) when there is room.
   const step: Row = { kind: 'step', step: steps[cur] as Step, isCurrent: currentIndex !== null }
   if (budget < 2) return [step]
   if (cur < n - 1) return [step, { kind: 'more', count: n - cur - 1, position: 'after' }]
-  if (cur > 0) return [emit(cur, n, false)[0] as Row, step]
+  if (cur > 0) return [emit(cur, n, { cost: 0, perLine: null })[0] as Row, step]
   return [step]
 }
 
@@ -360,9 +385,14 @@ export const needsYouCount = (prs: PrsView): number => prs.entries.filter(p => p
 
 const slugOf = (path: string): string => (path.split('/').pop() ?? path).replace(/\.md$/i, '')
 
-/** Rows a drawn step list takes: in compact a trailing `+n more` shares the last step's line. */
+/** Rows a drawn step list takes: in compact a trailing `+n more` shares the last step's line; children one per line take a row each. */
 function stepRowsDrawn(rows: Row[], wide: boolean): number {
-  return rows.filter((r, i) => wide || !(r.kind === 'more' && r.position === 'after' && rows[i - 1]?.kind === 'step')).length
+  let n = 0
+  rows.forEach((r, i) => {
+    if (!wide && r.kind === 'more' && r.position === 'after' && rows[i - 1]?.kind === 'step') return
+    n += r.kind === 'children' && r.perLine ? childLinesCost(r.items.length) : 1
+  })
+  return n
 }
 
 /** The rows `drawPane` draws for `m`, one per line. The row budget is spent against this count. */
@@ -384,7 +414,8 @@ export function paneRows(m: PaneModel): number {
     const note = pr.note === '' ? 0 : 1
     n += pr.compact ? 1 + note : gap + 1 + note + pr.rows.length + pr.others.length
   }
-  if (wide) n += gap + 1
+  // Wide: the footer (two rows when narrow), with its gap row and full-width rule above it when there are gaps.
+  if (wide) n += 2 * gap + (m.narrow ? 2 : 1)
   return n
 }
 
@@ -417,6 +448,7 @@ export function buildPaneModel(input: PaneInput): PaneModel {
 
   const layout = chooseLayout(ui.layout ?? input.opts.layout, width, input.placement)
   const wide = layout === 'wide'
+  const narrow = isNarrow(layout, width)
   const budget = input.placement === 'inline' ? Math.min(input.rows, INLINE_ROW_CAP) : input.rows
 
   const byId = new Map(input.prs.entries.map(e => [e.id, e]))
@@ -427,7 +459,7 @@ export function buildPaneModel(input: PaneInput): PaneModel {
   const hot = open.filter(r => (byId.get(r.id)?.attention ?? null) !== null)
   const cold = open.filter(r => (byId.get(r.id)?.attention ?? null) === null)
   const ordered = [...hot, ...cold]
-  const allSummary = h === null ? [] : wrapSummary(h.summary, width - 2)
+  const allSummary = h === null ? [] : wrapSummary(h.summary, narrow ? width - 1 : width - 2)
 
   // What the sections may take; given up step by step (below) to keep a few steps in view.
   const fit = {
@@ -435,6 +467,7 @@ export function buildPaneModel(input: PaneInput): PaneModel {
     summaryShown: allSummary.length,
     itemsShown: h === null ? 0 : Math.min(h.items.length, MAX_HANDOFF_ITEMS),
     gaps: wide,
+    childLines: wide && (currentStep(snap)?.children.length ?? 0) > 0,
     handoffMore: true,
     handoffCompact: !wide,
     prCompact: !wide,
@@ -452,20 +485,25 @@ export function buildPaneModel(input: PaneInput): PaneModel {
   const otherCount = open.length - hot.length
   const cur = currentStep(snap)
   const fromEarlier = h !== null && input.sessionId !== undefined && h.sessionId !== input.sessionId
+  const wideHead: PrSection['head'] =
+    count > 0
+      ? { before: ' · ', need: count === 1 ? '1 needs you' : `${count} need you`, hot: true, after: (otherCount > 0 ? ` · ${otherCount} other` : '') + polledPart }
+      : { before: ` · ${open.length} open · `, need: 'none need you', hot: false, after: polledPart }
 
   const assemble = (rows: Row[]): PaneModel => {
     const shown = ordered.slice(0, fit.prShown)
     let ho: HandoffSection | null = null
     if (h !== null) {
-      ho = handoffSection(h, now, width, allSummary.slice(0, fit.summaryShown), fit.itemsShown, input.prRows, fromEarlier)
+      ho = handoffSection(h, now, width, allSummary.slice(0, fit.summaryShown), fit.itemsShown, input.prRows, fromEarlier, narrow)
       if (fit.handoffCompact) ho = { ...ho, compact: true, summary: [], items: [], more: 0 }
       else if (!fit.handoffMore) ho = { ...ho, more: 0 }
     }
     return {
       kind: 'plan',
       layout,
+      narrow,
       width,
-      header: headerLine(snap, width),
+      header: headerLine(snap, width, narrow),
       bar: bar(finished(snap.counts), snap.counts.total, cur?.status ?? null, width),
       rows,
       shortWidth: Math.max(0, ...snap.steps.map(st => Array.from(st.short).length)),
@@ -475,10 +513,7 @@ export function buildPaneModel(input: PaneInput): PaneModel {
           : {
               count,
               open: open.length,
-              head:
-                count > 0
-                  ? { before: ' · ', need: count === 1 ? '1 needs you' : `${count} need you`, hot: true, after: (otherCount > 0 ? ` · ${otherCount} other` : '') + polledPart }
-                  : { before: ` · ${open.length} open · `, need: 'none need you', hot: false, after: polledPart },
+              head: narrow ? narrowPrHead(count, open.length, polledPart, width) : wideHead,
               rows: shown.filter(r => hotIds.has(r.id)).map(line),
               others: shown.filter(r => !hotIds.has(r.id)).map(line),
               polled,
@@ -496,11 +531,14 @@ export function buildPaneModel(input: PaneInput): PaneModel {
   }
 
   // The sections come first; they give up rows, in this order, only to keep a few steps in view:
-  // PR rows, summary lines, items, the gap rows, the `+n more` item row, then each section to one line.
+  // the current step's children to one row, PR rows, summary lines, items, the gap rows (and the
+  // footer rule), the `+n more` item row, then each section to one line.
   const minSteps = Math.min(snap.steps.length, 3)
+  const kidLines = childLinesCost(cur?.children.length ?? 0)
   const left = (): number => budget - paneRows(assemble([]))
-  while (wide && left() < minSteps) {
-    if (fit.prShown > 1) fit.prShown--
+  while (wide && left() < minSteps + (fit.childLines ? kidLines : 0)) {
+    if (fit.childLines) fit.childLines = false
+    else if (fit.prShown > 1) fit.prShown--
     else if (fit.summaryShown > 1) fit.summaryShown--
     else if (fit.itemsShown > 1) fit.itemsShown--
     else if (fit.gaps) fit.gaps = false
@@ -509,7 +547,17 @@ export function buildPaneModel(input: PaneInput): PaneModel {
     else if (!fit.prCompact && fit.prShown > 0) fit.prCompact = true
     else break
   }
-  return assemble(fitSteps(snap.steps, snap.currentIndex, Math.max(1, left()), layout))
+  return assemble(fitSteps(snap.steps, snap.currentIndex, Math.max(1, left()), layout, fit.childLines))
+}
+
+/** Narrow PR rule header: `· n need(s) you` or `· n open`, then `· polled …` while the rule still fits. */
+export function narrowPrHead(count: number, open: number, polledPart: string, width: number): PrSection['head'] {
+  const head: PrSection['head'] =
+    count > 0
+      ? { before: ' · ', need: count === 1 ? '1 needs you' : `${count} need you`, hot: true, after: polledPart }
+      : { before: ` · ${open} open`, need: '', hot: false, after: polledPart }
+  const used = Array.from(`── Pull requests${head.before}${head.need}${head.after}`).length
+  return used + 2 > width ? { ...head, after: '' } : head
 }
 
 const KIND_PAD = 8
@@ -535,11 +583,13 @@ function handoffSection(
   itemsShown: number,
   prRows: PrRow[],
   fromEarlier: boolean,
+  narrow = false,
 ): HandoffSection {
   const items = h.items.slice(0, itemsShown).map(it => {
     const ref = it.ref === undefined || it.ref.trim() === '' ? null : resolveRef(it.ref, prRows)
-    // indent 2, mark 1, gap 2, kind 8, gap 2, title, gap 2, ref
-    const room = width - 2 - 1 - 2 - KIND_PAD - 2 - (ref === null ? 0 : 2 + Array.from(ref.text).length)
+    // wide: indent 2, mark 1, gap 2, kind 8, gap 2, title, gap 2, ref; narrow: indent 1, mark 1, gap 1, kind 8, gap 1, title, gap 2, ref
+    const fixed = narrow ? 1 + 1 + 1 + KIND_PAD + 1 : 2 + 1 + 2 + KIND_PAD + 2
+    const room = width - fixed - (ref === null ? 0 : 2 + Array.from(ref.text).length)
     return { blocking: it.blocking, kind: it.kind.padEnd(KIND_PAD), title: shorten(it.title, Math.max(4, room)), ref }
   })
   return {
@@ -549,7 +599,8 @@ function handoffSection(
     summary,
     items,
     more: h.items.length - items.length,
-    line: handoffLine(h, width),
+    // Narrow draws the line after a one-space indent.
+    line: handoffLine(h, narrow ? width - 1 : width),
   }
 }
 

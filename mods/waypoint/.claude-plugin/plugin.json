@@ -10,6 +10,7 @@
     "band": { "type": "boolean", "title": "Band above prompt", "description": "Draw a one-line plan summary above the prompt while the pane is not placed.", "required": false, "default": true },
     "statusLine": { "type": "boolean", "title": "Status line", "description": "Pin the current step under the prompt.", "required": false, "default": true },
     "layout": { "type": "string", "title": "Pane layout", "description": "auto picks compact inline and wide when docked.", "required": false, "default": "auto", "options": ["auto", "compact", "wide"] },
+    "paneColumns": { "type": "number", "title": "Pane width", "description": "Body columns the docked pane asks for; the engine's own share when 0. Ignored inline and once you drag the dock.", "required": false, "default": 48 },
     "planDir": { "type": "string", "title": "Plan directory", "description": "Where /waypoint use <slug> looks for plan files.", "required": false, "default": "~/.claude/plans" },
     "planPollSeconds": { "type": "number", "title": "Plan poll (seconds)", "description": "How often the plan file is stat-ed for outside edits; 0 disables.", "required": false, "default": 5 },
     "resumeDays": { "type": "number", "title": "Resume window (days)", "description": "A plan last touched within this many days comes back in a new session in the same directory.", "required": false, "default": 14 },

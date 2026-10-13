@@ -28,33 +28,60 @@ claude --plugin-dir mods/waypoint
 
 ## What you see
 
-Docked and wide (60 columns or more):
+Docked and wide (64 columns or more):
 
 ```
-⚑ claude-mods repo + waypoint, a plan-progress pane mod                  WP5 · 5 of 6 · 83%
-████████████████████████████████████████████████████████████████████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+⚑ claude-mods repo + waypoint, a plan-progress pane mod                     WP5 · 6 of 7 · 85%
+██████████████████████████████████████████████████████████████████████████▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░
 
   ✓  WP0  Repo bootstrap and dev loop
-  ✓  WP1  Mod skeleton, contract, plan parser
-  ✓  WP2  State, events, discovery, commands, prompt section
-  ✓  WP3  Pane, band, status line
-  ✓  WP4  PR/MR "needs attention" subsystem
-  ▶  WP5  Docs, CI, PR, release                                                      2/4
-          ✓ docs   ✓ CI   · merge   · tag
+  !  WP5  Docs, CI, PR, release                                           3/6  waiting on you
+          ✓ README, CHANGELOG, marketplace entry
+          ✓ CI workflow green on a clean runner
+          · mark PR #1 ready and merge (after WP6)
+  ▶  WP6  Visual redesign and "Waiting on you" handoff
 
-  Pull requests · 1 open · none need you · polled 3s ago
-  ○  #1  feat(waypoint): plan pane with PR/MR attention, marketplace, CI   WP5    draft   copy · untrack
+── Pull requests · 1 open · none need you · polled 0s ago ────────────────────────────────────
+  ○  #1  feat(waypoint): plan pane with PR/MR attention and handoff note   WP6   draft   copy · untrack
 
-  Waiting on you · 12m ago
-  PR #1 is verified: 150 tests, strict validation, CI green on fba106a. Next: look at
-  the pane, then mark #1 ready and merge. After the merge I tag waypoint--v0.1.0.
-  !  decision  Mark PR #1 ready and merge?                                            #1
-  ·  action    Say how the pane looks on screen
+── Waiting on you · 12m ago ──────────────────────────────────────────────────────────────────
+  waypoint 0.2.0 is pushed to PR #1 as commit f7a4a05 …
+  !  action    Look at the redesigned pane and this note on screen
+  !  decision  Mark PR #1 ready and merge?                                                  #1
 
-  ~/.claude/plans/we-are-going-to-purring-origami.md · changed 12h ago     r refresh · p path · c close
+──────────────────────────────────────────────────────────────────────────────────────────────
+  ~/.claude/plans/we-are-going-to-purring-origami.md · changed 12m ago     r refresh · p path · c close
 ```
 
-Inline, or narrower than 60 columns (8 rows at most, no footer):
+Narrow dock. The docked pane asks the engine for 48 columns (`paneColumns`), and from 44 to 63 columns it keeps the sectioned layout, adapted: one-space indents, `WP6 · 5/7 · 71%` in the header, `needs you` on a blocked step, PR rows without the step or the `copy · untrack` buttons (the link opens the PR; `/waypoint untrack <ref>` still works), a PR header without `none need you` or `n other`, and the footer on two rows, the path and then the keys:
+
+```
+⚑ claude-mods repo + waypo…  WP6 · 5/7 · 71%
+████████████████████████████████▓▓▓▓▓▓░░░░░░░░
+
+ ✓ WP0 Repo bootstrap and dev loop
+ ✓ WP1 Mod skeleton, contract, plan parser
+ ! WP5 Docs, CI, PR, release     3/6  needs you
+       ✓ README, CHANGELOG, marketplace entry
+       · mark PR #1 ready and merge (after WP6)
+ ▶ WP6 Visual redesign and "Waiting on you"…
+
+── Pull requests · 1 open · polled 3s ago ─────
+ ○ #1 feat(waypoint): plan pane with P…  draft
+
+── Waiting on you · 12m ago ───────────────────
+ waypoint 0.2.0 is pushed to PR #1 as commit
+ f7a4a05: the pane redesign and this very
+ note. After your sign-off I mark #1 ready…
+ ! action   Look at the redesigned pane and…
+ ! decision Mark PR #1 ready and merge?     #1
+
+───────────────────────────────────────────────
+ ~/.claude/plans/we-are-going-to-purring-o…
+ r refresh · p path · c close
+```
+
+Inline, or docked narrower than 44 columns (8 rows at most, no footer):
 
 ```
 ⚑ ship the widget                    3/9 33%
@@ -71,9 +98,9 @@ The pane shows:
 
 - the plan title, and on the right the current step, `done of total` and the percentage (`3/9 33%` in compact);
 - a bar the full width of the pane in three spans: finished steps `█` (green), the current step's own share `▓` (plan-mode colour, or warning when it is blocked) and what remains `░`. It shows how far along the plan is and where the session is in it;
-- the step list, one glyph per step: `✓` done, `▶` in progress (bold), `·` pending (dim), `!` blocked on you (warning), `–` skipped (struck through); the current step shows its child-checkbox progress (`2/4`) and, in the wide layout, its checkboxes on the line below. When the steps do not fit, leading finished steps fold into one `✓ n done` row and a `+n more` row ends the list; the current step is always shown;
-- a "Pull requests" section while any tracked PR/MR is open: the header counts those that need you (failing CI, requested changes, conflicts, ready to merge; in warning colour when any do), the other open ones, and when PRs were last polled. Rows list those needing you first, then the others dimmed (5 rows at most), each with its link, title, step, status and `copy · untrack` buttons. A gh/glab error (not logged in, rate-limited, not installed) shows as a note under the header. Merged and closed PRs are not listed. Compact draws one line for the PR most in need;
-- a "Waiting on you" section while the model has left a handoff note (see below): when it was left, its summary (4 lines at most) and one line per item, `!` for those blocking the plan, with a link when the item names a tracked PR/MR or a URL. Its header says `from an earlier session` when the note was left by another session. Compact draws one line, `! waiting on you · <first item>`, and so does every other pane state (no plan tracked, planning, file missing, no steps), on its first row. This section and the PR section keep their rows before the step list does; when rows run short they give up the blank lines between sections, then the `+n more` item row, then fold to one line each (the handoff first, then the PRs);
+- the step list, one glyph per step: `✓` done, `▶` in progress (bold), `·` pending (dim), `!` blocked on you (warning), `–` skipped (struck through); the current step shows its child-checkbox progress (`2/4`) and, in the wide layout, its checkboxes below it: one per line under the title (8 at most, then `+n more`) when the rows allow, else all in one row. When the steps do not fit, leading finished steps fold into one `✓ n done` row and a `+n more` row ends the list; the current step is always shown;
+- a "Pull requests" section while any tracked PR/MR is open: the header counts those that need you (failing CI, requested changes, conflicts, ready to merge; in warning colour when any do), the other open ones, and when PRs were last polled. Rows list those needing you first, then the others dimmed (5 rows at most), each with its link, title, step, status and `copy · untrack` buttons (the narrow dock drops the step and the buttons). A gh/glab error (not logged in, rate-limited, not installed) shows as a note under the header. Merged and closed PRs are not listed. Compact draws one line for the PR most in need;
+- a "Waiting on you" section while the model has left a handoff note (see below): when it was left, its summary (4 lines at most) and one line per item, `!` for those blocking the plan, with a link when the item names a tracked PR/MR or a URL. Its header says `from an earlier session` when the note was left by another session. Compact draws one line, `! waiting on you · <first item>`, and so does every other pane state (no plan tracked, planning, file missing, no steps), on its first row. This section and the PR section keep their rows before the step list does; in the wide layout each section opens with a rule carrying its header (`── Pull requests ───`, `── Waiting on you ───`) and a full-width rule sits above the footer. When rows run short, the current step's checkboxes go back to one row first; then the sections give up the blank lines between them (and the footer rule), then the `+n more` item row, then fold to one line each (the handoff first, then the PRs);
 - in the wide layout, a footer with the plan path (`~` for your home folder), when the plan file last changed, and `refresh` / `path` / `close` buttons.
 
 With no plan tracked, `/waypoint` lists up to 5 recent plans from `planDir`, newest first, each with a hotkey `1`–`5` to track it.
@@ -137,6 +164,7 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 | `band` | `true` | Draw a one-line plan summary above the prompt while the pane is not placed |
 | `statusLine` | `true` | Pin the current step under the prompt |
 | `layout` | `auto` | `auto` picks compact inline and wide when docked; or `compact` / `wide` |
+| `paneColumns` | `48` | Body columns the docked pane asks for; 0 leaves the engine's share. Ignored inline and once you drag the dock. |
 | `planDir` | `~/.claude/plans` | Where `/waypoint use <slug>` looks for plan files |
 | `planPollSeconds` | `5` | How often the plan file is stat-ed for outside edits; 0 disables |
 | `resumeDays` | `14` | A plan last touched within this many days comes back in a new session in the same directory |
@@ -165,6 +193,7 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 ## Troubleshooting
 
 - **Pane does not appear.** It opens automatically only at 144 columns or wider. Run `/waypoint` to open it at any width; below that width the band above the prompt shows the summary.
+- **The pane is too tall, or too wide.** The dock is always full height; that is the engine's design, not an option. Its width comes from `paneColumns` (48 by default); a width you set by dragging the dock wins over it.
 - **Hotkeys do nothing.** They work only while the pane is focused (ctrl+x, then tab).
 - **No PR status, or an error note.** Check `gh auth status` / `glab auth status`. The pane shows the error class and retries with backoff.
 - **Non-gitlab.com GitLab host.** Support is untested; only gitlab.com has been verified.
