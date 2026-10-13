@@ -66,6 +66,9 @@ export function normalize(raw: string, maxBytes = MAX_BYTES): { text: string; by
 }
 
 /** FNV-1a 32-bit over UTF-16 code units, 8 hex chars. */
+/** Bump when the parser's output for the same text changes, so old snapshots never compare equal. */
+export const PARSER_VERSION = 2
+
 export function hashText(s: string): string {
   let h = 0x811c9dc5
   for (let i = 0; i < s.length; i++) {
@@ -400,7 +403,7 @@ export function parsePlan(raw: string, opts: { path: string; mtimeMs: number; no
     mtimeMs: opts.mtimeMs,
     bytes,
     truncated,
-    hash: hashText(text),
+    hash: hashText(`v${PARSER_VERSION}\n${text}`),
     parsedAt: opts.now,
     warnings,
   }

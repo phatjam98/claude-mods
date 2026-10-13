@@ -2,7 +2,7 @@
 
 ## 0.2.2 — 2026-10-13
 
-- Fix: after a plugin reload the plan is re-read even though its file has not changed, so a parser change shows without waiting for an edit (or `/waypoint refresh`).
+- Fix: a forced re-read (`/waypoint refresh`, and now every plugin reload) always re-parses the plan. Before, it returned early when the file's content hash was unchanged, so a parser change never showed until the file was edited. The hash now carries a parser version too.
 
 ## 0.2.1 — 2026-10-13
 

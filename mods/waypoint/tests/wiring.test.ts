@@ -514,3 +514,14 @@ test('/waypoint status with paneColumns 0 says the engine share', { options: { p
   expect((await command($, 'status')).text.split('\n')[1]).toBe('pane: inline · 64 columns (asked engine share)')
   await ui.unmount()
 })
+
+test('a forced refresh re-parses unchanged text; an event refresh still skips it', async ($, on) => {
+  const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW - 1000 } } })
+  await planMode($)
+  const first = (w.store['last:/work'] as { at: number }).at
+  await w.clock.advance(5000)
+  await turnDone($) // same bytes, same mtime: nothing to do
+  expect((w.store['last:/work'] as { at: number }).at).toBe(first)
+  await command($, 'refresh') // forced: the parser may have changed under a reload
+  expect((w.store['last:/work'] as { at: number }).at).toBeGreaterThan(first)
+})
