@@ -1,5 +1,9 @@
 # Changelog
 
+## waypoint 0.2.2 — 2026-10-13
+
+Fix: the plan is re-read after a plugin reload, so a parser change shows without an edit to the file.
+
 ## waypoint 0.2.1 — 2026-10-13
 
 Fix: marked step headings under a prose section (no `## Work packages` heading) were ignored and the plan fell through to its checkbox lines.

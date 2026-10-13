@@ -268,7 +268,9 @@ async function refreshOnce($: EngineInterface, reason: 'event' | 'poll' | 'force
     if (t.missing) await update($, tracked, cur => (cur && samePath(cur.path, t.path) ? { ...cur, missing: false } : cur))
     await setUi($, { lastReadAt: now, lastError: null })
     const snap = parsePlan(raw, { path: t.path, mtimeMs: st.mtimeMs, now })
-    if (prevSame && prevSame.hash === snap.hash && !t.missing) return
+    // A forced read always lands: the parser may have changed under a reload
+    // or `/waypoint refresh`, and the file's hash cannot know that.
+    if (reason !== 'force' && prevSame && prevSame.hash === snap.hash && !t.missing) return
     await update($, plan, () => snap)
     try {
       await onPlanParsed($, snap)
@@ -464,6 +466,9 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
       // resume is best effort
     }
   } else {
+    // A reload may carry a changed parser: re-read the plan even though its
+    // mtime is unchanged, or the pane keeps the snapshot the old code made.
+    await refresh($, 'force')
     await prsPublish($)
   }
   await handoffPublish($)

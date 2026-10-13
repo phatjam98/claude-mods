@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 — 2026-10-13
+
+- Fix: a forced re-read (`/waypoint refresh`, and now every plugin reload) always re-parses the plan. Before, it returned early when the file's content hash was unchanged, so a parser change never showed until the file was edited. The hash now carries a parser version too.
+
 ## 0.2.1 — 2026-10-13
 
 - Fix: a marked step heading (`### [x] WP1 — …`) directly under a prose section such as `## Context` was treated as prose, so a plan with no `## Work packages` heading fell through to its checkbox lines (`0 of 17`). A marker now always makes the heading a step; only unmarked siblings need a step-like name outside prose.
