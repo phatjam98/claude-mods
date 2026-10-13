@@ -3,6 +3,7 @@
 ## 0.2.1 — 2026-10-13
 
 - Fix: a marked step heading (`### [x] WP1 — …`) directly under a prose section such as `## Context` was treated as prose, so a plan with no `## Work packages` heading fell through to its checkbox lines (`0 of 17`). A marker now always makes the heading a step; only unmarked siblings need a step-like name outside prose.
+- Fix: after a plugin reload the plan is re-read even though its file has not changed, so a parser change shows without waiting for an edit (or `/waypoint refresh`).
 
 ## 0.2.0 — 2026-10-13
 
