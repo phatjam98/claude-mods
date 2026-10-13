@@ -307,7 +307,22 @@ async function paneTick($: EngineInterface, gen: number): Promise<void> {
   }
 }
 
+/**
+ * Re-seats an already open pane so a `columns` request is applied anew: the
+ * engine's open of an open id only retitles. No-op when nothing is asked.
+ */
+async function reseatPane($: EngineInterface): Promise<void> {
+  if (cfg.paneColumns === undefined) return
+  try {
+    const open = (await $.ui.panes()).some(p => p.id === PANE_ID)
+    if (open) await $.ui.close({ id: PANE_ID })
+  } catch {
+    // the kit or surface has no panes/close: open as usual
+  }
+}
+
 async function openPane($: EngineInterface): Promise<boolean> {
+  await reseatPane($)
   try {
     const r = await $.ui.open({
       id: PANE_ID,
