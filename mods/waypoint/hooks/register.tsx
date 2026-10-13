@@ -464,6 +464,9 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
       // resume is best effort
     }
   } else {
+    // A reload may carry a changed parser: re-read the plan even though its
+    // mtime is unchanged, or the pane keeps the snapshot the old code made.
+    await refresh($, 'force')
     await prsPublish($)
   }
   await handoffPublish($)
