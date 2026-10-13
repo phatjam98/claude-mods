@@ -192,8 +192,11 @@ export function selectSteps(scan: Scan): Selection {
   if (marked.length > 0) {
     const depth = Math.min(...marked.map(h => h.depth))
     const parents = new Set(marked.filter(h => h.depth === depth).map(h => h.parent))
+    // A marker is the author's explicit word: a marked heading is a step even
+    // under a prose section such as `## Context`. Only unmarked siblings need
+    // a step-like name and a parent outside prose.
     const hs = cands.filter(
-      h => h.depth === depth && !h.underNonStep && (h.marker !== null || (isStepLike(h.text) && parents.has(h.parent))),
+      h => h.depth === depth && (h.marker !== null || (!h.underNonStep && isStepLike(h.text) && parents.has(h.parent))),
     )
     if (hs.length > 0) return { mode: 'marked', depth, headings: hs }
   }

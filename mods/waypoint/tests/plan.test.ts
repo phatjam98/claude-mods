@@ -233,3 +233,30 @@ test('planTitle: the first # heading outside fences, `Plan:` stripped; else a sh
   const p = parsePlan('# Plan: ship it\n', { path: '/p/a.md', mtimeMs: 0, now: 0 })
   expect(planTitle('# Plan: ship it\n')).toEqual({ title: p.title, displayTitle: p.displayTitle })
 })
+
+test('marked headings under a prose section are still steps (checkboxes must not win)', () => {
+  const text = [
+    '# claude-mods + waypoint writeups',
+    '',
+    '## Context',
+    'Some prose.',
+    '',
+    '### [x] WP1 — Projects index entry',
+    '- [x] add the entry',
+    '- [ ] check the page',
+    '',
+    '### [~] WP2 — Diagram',
+    '- [ ] draw it',
+    '',
+    '### [ ] WP3 — Article',
+    '',
+    '## Verification',
+    '- [ ] npm run build passes',
+  ].join('\n')
+  const snap = parsePlan(text, { path: '/p/x.md', mtimeMs: 1, now: 2 })
+  expect(snap.mode).toBe('marked')
+  expect(snap.steps.map(s => s.short)).toEqual(['WP1', 'WP2', 'WP3'])
+  expect(snap.counts).toMatchObject({ total: 3, done: 1, active: 1, pending: 1 })
+  expect(snap.percent).toBe(33)
+  expect(snap.currentIndex).toBe(1)
+})

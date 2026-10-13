@@ -1,5 +1,9 @@
 # Changelog
 
+## waypoint 0.2.1 — 2026-10-13
+
+Fix: marked step headings under a prose section (no `## Work packages` heading) were ignored and the plan fell through to its checkbox lines.
+
 ## waypoint 0.2.0 — 2026-10-13
 
 Visual redesign of the pane (place-in-plan bar, titled PR rows, section spacing) and a "Waiting on you" handoff note the model leaves through `mcp__waypoint__handoff`.
