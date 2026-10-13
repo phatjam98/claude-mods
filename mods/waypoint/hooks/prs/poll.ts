@@ -125,10 +125,19 @@ function givenUp(e: PrEntry): boolean {
   return e.error === 'not-found' && e.failures >= NOT_FOUND_GIVE_UP
 }
 
-/** Never confirmed to exist (no successful poll yet) and failing on every class: debris. */
+/**
+ * Never confirmed to exist (no successful poll yet) and failing with an error
+ * that is about the ref itself (`other`, `not-found`), NEVER_CONFIRMED_FAILURES
+ * times: debris. Auth, rate-limit and missing-binary failures say nothing about
+ * the ref and never count.
+ */
 export const NEVER_CONFIRMED_FAILURES = 5
 export function neverConfirmed(e: PrEntry): boolean {
-  return e.updatedAt === undefined && e.failures >= NEVER_CONFIRMED_FAILURES
+  return (
+    e.updatedAt === undefined &&
+    e.failures >= NEVER_CONFIRMED_FAILURES &&
+    (e.error === 'other' || e.error === 'not-found')
+  )
 }
 
 /**

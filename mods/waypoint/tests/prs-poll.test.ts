@@ -229,7 +229,9 @@ test('prune drops an entry never confirmed to exist after 5 failures of any clas
   const debris = { ...base, error: 'other' as const, failures: 5 }
   const young = { ...base, id: 'y', error: 'other' as const, failures: 4 }
   const confirmed = { ...base, id: 'c', updatedAt: '2026-10-12T00:00:00Z', error: 'other' as const, failures: 9 }
+  const authed = { ...base, id: 'a', error: 'auth' as const, failures: 9 }
   expect(neverConfirmed(debris)).toBe(true)
   expect(neverConfirmed(confirmed)).toBe(false)
-  expect(Object.keys(prune({ [debris.id]: debris, y: young, c: confirmed }, now)).sort()).toEqual(['c', 'y'])
+  expect(neverConfirmed(authed)).toBe(false)
+  expect(Object.keys(prune({ [debris.id]: debris, y: young, c: confirmed, a: authed }, now)).sort()).toEqual(['a', 'c', 'y'])
 })
