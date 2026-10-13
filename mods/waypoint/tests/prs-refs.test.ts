@@ -4,6 +4,7 @@ import {
   discoverFromBash,
   extractRefs,
   extractShortRefs,
+  extractPlanRefs,
   extractUrls,
   ghViewArgs,
   glabEnv,
@@ -190,4 +191,47 @@ test('discoverFromBash: output URLs only when the command named no PR, and only 
       }),
     ),
   ).toEqual(['gitlab.com/ecfx/ecfx-backend!6680'])
+})
+
+test('extractPlanRefs: bare numbers in prose are ignored', () => {
+  const body = 'Covers #13 and #123456 from the review (#31); see issue #2, #3 and #5.\nAlso !6677 here.'
+  expect(extractPlanRefs(body, GH)).toEqual([])
+  expect(extractPlanRefs(body, GL)).toEqual([])
+})
+
+test('extractPlanRefs: PR/MR lines, any full URL, and markdown link targets each yield one ref', () => {
+  expect(ids(extractPlanRefs('Prose #4.\n- PR: #13', GH))).toEqual(['github.com/phatjam98/eventhorizon#13'])
+  expect(ids(extractPlanRefs('- PR: https://github.com/o/r/pull/9', GH))).toEqual(['github.com/o/r#9'])
+  expect(ids(extractPlanRefs('  * MR: !6677', GL))).toEqual(['gitlab.com/ecfx/ecfx-backend!6677'])
+  expect(ids(extractPlanRefs('Done in [fix](https://gitlab.com/g/p/-/merge_requests/4).', null))).toEqual(['gitlab.com/g/p!4'])
+  expect(ids(extractPlanRefs('- **pr:** g/sub/p!7', GL))).toEqual(['gitlab.com/g/sub/p!7'])
+  expect(ids(extractPlanRefs('See [the PR](#21) for it.', GH))).toEqual(['github.com/phatjam98/eventhorizon#21'])
+  expect(ids(extractPlanRefs('Merged https://github.com/o/r/pull/9 (was #8)', GH))).toEqual(['github.com/o/r#9'])
+  expect(extractPlanRefs('- PR: #13', null)).toEqual([])
+})
+
+test('discoverFromBash: a gh call quoted inside a script yields nothing', () => {
+  const commands = [
+    `node -e "run('gh pr view 13 --repo o/r', 1)"`,
+    `node -e "const c = 'gh pr view 13 --repo o/r', d = 1"`,
+    `python3 -c "x = 'gh pr view 13 -R o/r,'"`,
+    `echo 'gh pr view --repo=$REPO 13'`,
+    `node -e "x('gh pr view 13', 1)"`,
+    'gh pr view 1234567',
+  ]
+  for (const command of commands) expect(discoverFromBash({ command, repo: GH })).toEqual([])
+})
+
+test('discoverFromBash: clean --repo values still resolve, with or without a host', () => {
+  expect(ids(discoverFromBash({ command: 'gh pr view 13 --repo o/r', repo: GH }))).toEqual(['github.com/o/r#13'])
+  expect(ids(discoverFromBash({ command: 'gh pr view 13 --repo github.example.com/o/r', repo: GH }))).toEqual([
+    'github.example.com/o/r#13',
+  ])
+  expect(ids(discoverFromBash({ command: "gh pr view 13 --repo 'o/r'", repo: GH }))).toEqual(['github.com/o/r#13'])
+})
+
+test('resolveManualRef rejects shell debris and 7+ digit numbers', () => {
+  for (const arg of ["o/r',#13", '#1234567', 'o/r!1234567', '$PR', '{o/r}#1', 'https://github.com/o/r/pull/2 extra']) {
+    expect(resolveManualRef(arg, GH).ok).toBe(false)
+  }
 })

@@ -187,6 +187,18 @@ test('plan refs get source plan + stepId; a re-parse drops vanished plan refs on
   expect(Object.keys(w.store[PLAN_KEY].entries)).toEqual(['github.com/phatjam98/eventhorizon#14'])
 })
 
+test('plan prose numbers track nothing; a `- PR:` line tracks one ref on its step', async ($, on) => {
+  const prose = 'Examples: #2, #3 and #5 were noisy; see #13, #31 and #123456 (#31).'
+  const w = world(on, { files: { [PLAN]: planWith(prose) } })
+  await start($)
+  await command($, 'use purring-origami')
+  expect(w.store[PLAN_KEY]).toBeUndefined()
+  w.write(PLAN, planWith(`${prose}\n- PR: #13`))
+  await $.tool.call({ tool: 'Edit', tool_use_id: 'e1', file_path: PLAN, old_string: 'a', new_string: 'b' } as any)
+  expect(Object.keys(w.store[PLAN_KEY].entries)).toEqual([PR13])
+  expect(w.store[PLAN_KEY].entries[PR13]).toMatchObject({ source: 'plan', stepId: expect.stringContaining('wp2') })
+})
+
 test('/waypoint track and untrack', async ($, on) => {
   const w = world(on)
   await start($)
@@ -242,6 +254,16 @@ test('session start sweeps idle session keys and stale plan stores; keeps live o
     'waypoint:prs:session/RUNNING', // a concurrent session's PRs, polled a minute ago, stay
     SESSION_KEY,
   ])
+})
+
+test('session start prunes kept stores: a not-found entry after 3 failures goes', async ($, on) => {
+  const w = world(on)
+  const phantom = { ...full(5, 'open', NOW - DAY), error: 'not-found', failures: 3 }
+  w.store['waypoint:prs:plan/live.md'] = storeOf(full(4, 'open', NOW - DAY), phantom)
+  w.store['waypoint:prs:plan/only-phantom.md'] = storeOf(phantom)
+  await start($)
+  expect(Object.keys(w.store['waypoint:prs:plan/live.md'].entries)).toEqual(['github.com/phatjam98/eventhorizon#4'])
+  expect(w.store['waypoint:prs:plan/only-phantom.md']).toBeUndefined()
 })
 
 test('every PR store write prunes: a closed entry older than 7 days goes on the next discovery', async ($, on) => {

@@ -172,6 +172,16 @@ test('prune drops closed entries after 7 days and caps the store', () => {
   expect(kept['e0']).toBeUndefined()
 })
 
+test('prune drops a not-found entry after 3 failures, whatever its state; keeps it at 2', () => {
+  const now = 100 * DAY
+  const base = entry13()
+  const gone = { ...base, id: 'gone', error: 'not-found' as const, failures: 3 }
+  const goneMerged = { ...base, id: 'goneMerged', state: 'merged' as const, closedAt: now, error: 'not-found' as const, failures: 4 }
+  const twice = { ...base, id: 'twice', error: 'not-found' as const, failures: 2 }
+  const authed = { ...base, id: 'authed', error: 'auth' as const, failures: 5 }
+  expect(Object.keys(prune({ gone, goneMerged, twice, authed }, now)).sort()).toEqual(['authed', 'twice'])
+})
+
 test('toView sorts attention, open, closed (newest first) and reports last poll', () => {
   let s = emptyStore()
   for (const n of [1, 2, 3, 4]) s = upsert(s, ref(n), 'session', n * 10)

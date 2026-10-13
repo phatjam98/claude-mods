@@ -58,6 +58,8 @@ Example: `### [~] WP2 — Remove the old field`. A step-like heading with no mar
 
 While a plan is tracked, the mod adds a short section to the system prompt asking the model to keep the markers current and to add a `- PR: <url>` line under a step when it opens a PR. In plan mode it asks the model to write markers on the step headings.
 
+PR/MR links are read from a step in two ways: any full PR/MR URL anywhere in the step, and short refs (`#13`, `!6677`, `group/project!6677`, against this repo) only on a `- PR: <url or #n>` / `- MR: …` line under the step, or as a markdown link target (`[fix](#13)`). A bare `#123` in prose is ignored.
+
 ## Commands
 
 | Command | Does |
@@ -97,8 +99,8 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 
 - **Reads** the tracked plan file, and lists `planDir` (default `~/.claude/plans`) for the recent-plans picker and `/waypoint use <slug>`.
 - **Reads** the `HOME` environment variable, to expand `~` in paths.
-- **Reads** the session's git `origin` remote through the engine (`$.session.repo`), only to know which host and repo a bare `#123` / `!123` belongs to.
-- **Observes** Bash tool calls whose command mentions `gh` or `glab`, from the main session and from subagents alike: the command text and its output, to find PR/MR references. It reads nothing from other Bash calls. From the output it takes only the first PR/MR URL, and only when the command named no PR (`gh pr create`, a bare `gh pr view`).
+- **Reads** the session's git `origin` remote through the engine (`$.session.repo`), only to know which host and repo a short `#123` / `!123` (on a `- PR:` line, in `/waypoint track`, or in a `gh pr` / `glab mr` command) belongs to.
+- **Observes** Bash tool calls whose command mentions `gh` or `glab`, from the main session and from subagents alike: the command text and its output, to find PR/MR references. It reads nothing from other Bash calls. From the output it takes only the first PR/MR URL, and only when the command named no PR (`gh pr create`, a bare `gh pr view`). A `--repo` / `-R` value or PR number carrying quotes, commas, `$` or braces (a `gh` call quoted inside a script) is ignored.
 - **Observes** `Write` and `Edit` calls (main session only), to re-read the plan when its file is the one written.
 - **Observes** `ExitPlanMode` calls (main session only), to pick up the plan file the call names.
 - **Observes** the plan-mode attachments (`plan_mode`, `plan_mode_reentry`, `plan_mode_exit`; main session only), for the plan file path and whether plan mode is on.
@@ -107,7 +109,7 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 - **Adds** a short section to the system prompt while a plan is tracked or in plan mode. It asks the model to keep the step markers current: "A step is a heading whose text starts with a marker: `### [ ] WP1 — Title` pending, `[~]` in progress, `[x]` done, `[!]` blocked on the user", to edit a heading to `[~]` when starting and `[x]` when finished, and to add `- PR: <url>` under a step when it opens a PR.
 - **Writes** to the clipboard only when you press `p` (plan path) or `copy` (PR URL).
 - **Notifies** with native system notifications only when the `notify` option is on; toasts show otherwise.
-- **Stores**, in the plugin's own store: `layout` (your `/waypoint layout` choice); `last:<cwd>` = `{ path, title, at, percent, sessionId }` (to resume the plan in that directory); `waypoint:prs:plan/<plan path>` and `waypoint:prs:session/<session id>` = the tracked PR/MR entries (id, URL, title, branch, state, CI/review/merge status, when seen and polled). Closed PRs older than 7 days are pruned on every write; at session start other sessions' session keys with no activity in the last day, and plan keys with no open PR and nothing newer than 7 days, are deleted.
+- **Stores**, in the plugin's own store: `layout` (your `/waypoint layout` choice); `last:<cwd>` = `{ path, title, at, percent, sessionId }` (to resume the plan in that directory); `waypoint:prs:plan/<plan path>` and `waypoint:prs:session/<session id>` = the tracked PR/MR entries (id, URL, title, branch, state, CI/review/merge status, when seen and polled). Closed PRs older than 7 days, and PRs/MRs the CLI reported not found three polls running, are pruned on every write and at session start; also at session start other sessions' session keys with no activity in the last day, and plan keys with no open PR and nothing newer than 7 days, are deleted.
 - **Sends** nothing itself: it makes no network requests of its own (gh/glab do, with your logins).
 - **Never** writes to repositories or to the plan file.
 
@@ -117,7 +119,7 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 - **Hotkeys do nothing.** They work only while the pane is focused (ctrl+x, then tab).
 - **No PR status, or an error note.** Check `gh auth status` / `glab auth status`. The pane shows the error class and retries with backoff.
 - **Non-gitlab.com GitLab host.** Support is untested; only gitlab.com has been verified.
-- **A PR appears that is not yours.** A `#123` in plan text can be a false positive. Run `/waypoint untrack <ref>`.
+- **A PR appears that is not yours.** A `#123` on a `- PR:` line or a PR URL in a step is always tracked. Run `/waypoint untrack <ref>`; one that does not exist is dropped after three not-found polls.
 - **See what it hooks.** Run `claude plugin validate .` in `mods/waypoint`.
 
 ## Develop

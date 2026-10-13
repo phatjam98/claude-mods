@@ -120,10 +120,18 @@ function expired(e: PrEntry, now: number): boolean {
   return e.state !== 'open' && e.closedAt !== undefined && now - e.closedAt > PRUNE_DAYS * DAY_MS
 }
 
-/** Drop closed entries older than PRUNE_DAYS, then keep at most MAX_ENTRIES (open first, newest first). */
+/** The CLI said this PR/MR does not exist, NOT_FOUND_GIVE_UP times running: a phantom ref. */
+function givenUp(e: PrEntry): boolean {
+  return e.error === 'not-found' && e.failures >= NOT_FOUND_GIVE_UP
+}
+
+/**
+ * Drop closed entries older than PRUNE_DAYS and given-up not-found entries (any
+ * state), then keep at most MAX_ENTRIES (open first, newest first).
+ */
 export function prune(entries: Record<string, PrEntry>, now: number): Record<string, PrEntry> {
   const kept = Object.values(entries)
-    .filter((e) => !expired(e, now))
+    .filter((e) => !expired(e, now) && !givenUp(e))
     .sort((a, b) => Number(b.state === 'open') - Number(a.state === 'open') || b.firstSeenAt - a.firstSeenAt)
     .slice(0, MAX_ENTRIES)
   return Object.fromEntries(kept.map((e) => [e.id, e]))

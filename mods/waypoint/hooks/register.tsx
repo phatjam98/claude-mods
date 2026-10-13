@@ -15,7 +15,7 @@ import {
   dropPlanRefsNotIn,
   emptyStore,
   errorText,
-  extractRefs,
+  extractPlanRefs,
   glabEnv,
   KICKOFF_MS,
   newToasts,
@@ -551,16 +551,23 @@ async function prsSave($: EngineInterface, key: string, store: PrsStore): Promis
   return kept
 }
 
-/** Start of session: drop other sessions' idle unmigrated keys (a running session's stay) and plan stores nobody needs. */
+/**
+ * Start of session: drop other sessions' idle unmigrated keys (a running
+ * session's stay) and plan stores nobody needs; prune the rest as a write would.
+ */
 async function prsSweep($: EngineInterface): Promise<void> {
   try {
     const own = sessionPrsKey(await $.session.id())
     const now = await $.clock.now()
     for (const k of await $.store.keys()) {
-      if (k.startsWith(sessionPrsKey(''))) {
-        if (k !== own && idleSessionStore(await prsLoad($, k), now)) await $.store.delete(k)
+      const isSession = k.startsWith(sessionPrsKey(''))
+      if (!isSession && !k.startsWith(planPrsKey(''))) continue
+      const store = await prsLoad($, k)
+      const drop = isSession ? k !== own && idleSessionStore(store, now) : staleStore(store, now)
+      if (drop) await $.store.delete(k)
+      else if (Object.keys(prune(store.entries, now)).length !== Object.keys(store.entries).length) {
+        await prsSave($, k, store)
       }
-      else if (k.startsWith(planPrsKey('')) && staleStore(await prsLoad($, k), now)) await $.store.delete(k)
     }
   } catch {
     // housekeeping is best effort
@@ -650,7 +657,7 @@ async function onPlanParsed($: EngineInterface, snap: PlanSnapshot): Promise<voi
   let store = before
   const keep: string[] = []
   for (const step of snap.steps) {
-    for (const ref of extractRefs(step.body, repo)) {
+    for (const ref of extractPlanRefs(step.body, repo)) {
       store = upsert(store, ref, 'plan', now, step.id)
       keep.push(prId(ref))
     }

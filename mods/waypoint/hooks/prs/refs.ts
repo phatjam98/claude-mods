@@ -97,6 +97,28 @@ export function extractShortRefs(text: string, repo: RepoRef): PrRef[] {
   return dedup(out)
 }
 
+/** A step-body line that declares its PR/MR: `- PR: …`, `* MR: …`, `1. **PR:** …` (case-insensitive). */
+const PR_LINE = /^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__)?(?:PR|MR)s?(?:\*\*|__)?\s*:(?:\*\*|__)?(.*)$/i
+
+/**
+ * Refs a plan step names: every full PR/MR URL anywhere in the body, plus short
+ * refs (`#n`, `!n`, `group/project!n`) only on `- PR:` / `- MR:` lines or as a
+ * markdown link target. A bare `#123` in prose is ignored. URLs first, deduped.
+ */
+export function extractPlanRefs(body: string, repo?: RepoRef | null): PrRef[] {
+  const urls = extractUrls(body)
+  if (!repo) return urls
+  const short: PrRef[] = []
+  for (const line of body.split('\n')) {
+    const m = PR_LINE.exec(line)
+    if (m) short.push(...extractShortRefs(m[1] ?? '', repo))
+  }
+  for (const m of body.matchAll(/\]\(\s*([^)\s]+)\s*\)/g)) {
+    if (m[1] && /^(?:(?:[a-z0-9_.-]+\/)+[a-z0-9_.-]+)?[#!]\d{1,6}$/i.test(m[1])) short.push(...extractShortRefs(m[1], repo))
+  }
+  return dedup([...urls, ...short])
+}
+
 /** URLs plus, when a repo is known, short refs. Deduplicated by id, URLs first. */
 export function extractRefs(text: string, repo?: RepoRef | null): PrRef[] {
   const urls = extractUrls(text)
@@ -112,16 +134,23 @@ function unquote(tok: string): string {
   return tok.replace(/^['"]|['"]$/g, '')
 }
 
-/** The repo named by a `--repo` / `-R` value, for the CLI's kind. */
+/** `[HOST/]OWNER/REPO` or `GROUP/…/REPO`: path segments only, no quotes, commas, `$` or braces. */
+const REPO_VALUE = /^(?:[a-z0-9.-]+\/)?[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)+$/i
+const PR_NUMBER = /^[#!]?\d{1,6}$/
+/** Shell or quoting debris that never appears in a real ref argument. */
+const JUNK = /[\s'"`$,{}()<>;|&\\]/
+
+/** The repo named by a `--repo` / `-R` value, for the CLI's kind; undefined when the value is not a clean repo. */
 function repoFromFlag(value: string, kind: PrKind, session: RepoRef | null | undefined): RepoRef | undefined {
   const v = value.trim()
-  if (!v) return undefined
+  if (!v || JUNK.test(v)) return undefined
   if (/:\/\/|^[\w.-]+@/.test(v)) {
     const r = parseRemote(v)
-    return r ? { ...r, kind } : undefined
+    return r && /^[a-z0-9.-]+(?::\d+)?$/.test(r.host) ? { ...r, kind } : undefined
   }
-  const segs = v.replace(/\/+$/, '').split('/').filter(Boolean)
-  if (segs.length < 2) return undefined
+  const bare = v.replace(/\/+$/, '')
+  if (!REPO_VALUE.test(bare)) return undefined
+  const segs = bare.split('/')
   const defHost = session?.kind === kind ? session.host : kind === 'github' ? 'github.com' : 'gitlab.com'
   // gh takes [HOST/]OWNER/REPO; glab takes GROUP/NAMESPACE/REPO (a host needs a URL).
   if (kind === 'github' && segs.length >= 3) {
@@ -131,6 +160,7 @@ function repoFromFlag(value: string, kind: PrKind, session: RepoRef | null | und
 }
 
 type Scan = { scanned: boolean; named: boolean; refs: PrRef[] }
+const NONE: Scan = { scanned: false, named: false, refs: [] }
 
 function scanSegment(seg: string, session: RepoRef | null | undefined): Scan {
   const toks = seg.trim().split(/\s+/).map(unquote).filter(Boolean)
@@ -151,7 +181,7 @@ function scanSegment(seg: string, session: RepoRef | null | undefined): Scan {
       break
     }
   }
-  if (at < 0) return { scanned: false, named: false, refs: [] }
+  if (at < 0) return NONE
   let repo: RepoRef | undefined = session?.kind === kind ? session : undefined
   // Only the first positional counts, and only if no other flag precedes it:
   // a flag's value (`--interval 10`, `--body "3 places"`) is never the PR.
@@ -159,16 +189,20 @@ function scanSegment(seg: string, session: RepoRef | null | undefined): Scan {
   let done = false
   for (let i = at; i < toks.length; i++) {
     const t = toks[i] ?? ''
+    // A `--repo` value that is not a clean repo (quote, comma, `$`…) means this
+    // is not a real invocation (e.g. a quoted string inside a script): no ref.
     if (t === '--repo' || t === '-R') {
       const r = repoFromFlag(toks[i + 1] ?? '', kind, session)
-      if (r) repo = r
+      if (!r) return NONE
+      repo = r
       i++
       continue
     }
     const eq = /^(?:--repo=|-R=?)(.+)$/.exec(t)
     if (eq && eq[1]) {
       const r = repoFromFlag(eq[1], kind, session)
-      if (r) repo = r
+      if (!r) return NONE
+      repo = r
       continue
     }
     if (done) continue
@@ -176,9 +210,11 @@ function scanSegment(seg: string, session: RepoRef | null | undefined): Scan {
     if (!t.startsWith('-')) positional = t
   }
   if (positional !== undefined) {
+    if (JUNK.test(positional)) return NONE
     const urls = extractUrls(positional)
     if (urls[0]) return { scanned: true, named: true, refs: [urls[0]] }
     if (/^[#!]?\d+$/.test(positional)) {
+      if (!PR_NUMBER.test(positional)) return NONE
       const refs = repo ? [{ ...repo, number: Number(positional.replace(/^[#!]/, '')) }] : []
       return { scanned: true, named: true, refs }
     }
@@ -222,9 +258,10 @@ export type ManualRef = { ok: true; ref: PrRef } | { ok: false; error: string }
 export function resolveManualRef(arg: string, repo?: RepoRef | null): ManualRef {
   const a = arg.trim()
   if (!a) return { ok: false, error: 'usage: /waypoint track <url | #n | !n | group/project!n>' }
+  if (JUNK.test(a)) return { ok: false, error: `not a PR/MR reference: ${a}` }
   const urls = extractUrls(a)
   if (urls[0]) return { ok: true, ref: urls[0] }
-  const short = /^([#!])(\d{1,7})$/.exec(a)
+  const short = /^([#!])(\d{1,6})$/.exec(a)
   if (short && short[2]) {
     const kind: PrKind = short[1] === '#' ? 'github' : 'gitlab'
     if (repo?.kind !== kind) {
@@ -233,7 +270,7 @@ export function resolveManualRef(arg: string, repo?: RepoRef | null): ManualRef 
     }
     return { ok: true, ref: { ...repo, number: Number(short[2]) } }
   }
-  const full = /^((?:[\w.-]+\/)+[\w.-]+)([#!])(\d+)$/.exec(a)
+  const full = /^((?:[\w.-]+\/)+[\w.-]+)([#!])(\d{1,6})$/.exec(a)
   if (full && full[1] && full[3]) {
     const kind: PrKind = full[2] === '#' ? 'github' : 'gitlab'
     const segs = full[1].split('/')
