@@ -103,7 +103,7 @@ The pane shows:
 - a "Waiting on you" section while the model has left a handoff note (see below): when it was left, its summary (6 lines at most, fewer when rows are tight) and one line per item, `!` for those blocking the plan, with a link when the item names a tracked PR/MR or a URL. Its header says `from an earlier session` when the note was left by another session. Compact draws one line, `! waiting on you · <first item>`, and so does every other pane state (no plan tracked, planning, file missing, no steps), on its first row. This section and the PR section keep their rows before the step list does; in the wide layout each section opens with a rule carrying its header (`── Pull requests ───`, `── Waiting on you ───`) and a full-width rule sits above the footer. When rows run short, the current step's checkboxes go back to one row first; then the sections give up the blank lines between them (and the footer rule), then the `+n more` item row, then fold to one line each (the handoff first, then the PRs);
 - in the wide layout, a footer with the plan path (`~` for your home folder), when the plan file last changed, and `refresh` / `path` / `close` buttons.
 
-With no plan tracked, `/waypoint` lists up to 5 recent plans from `planDir`, newest first, each with a hotkey `1`–`5` to track it.
+With no plan tracked, `/waypoint` lists up to 5 recent plans from `planDir`, newest first, each with a hotkey `1`–`5` to track it. Each row reads `<title> · 71% · 36m ago`: the plan's title (its first `#` heading, without a `Plan:` prefix; the file slug when it has none or cannot be read), its progress when a session has tracked it before, and when the file last changed. The title is cut to fit the pane. In the wide layout a dim line under each row names the folder it was last tracked from (`in ~/src/claude-mods`). The same numbered list comes back in the command's reply, so `/waypoint use 2` tracks the second plan without the pane. `/waypoint use` with a name that matches no file replies with that list too.
 
 When the pane is not placed (narrow terminal, or closed), a one-line band above the prompt carries the summary (for example the current step, steps done, PRs needing you) with an `open` button. While a handoff note is up it reads `⚑ waiting on you (2) · WP5 of 6 · 5 done`, in warning colour, and with no plan tracked it still shows as `⚑ waiting on you (2)`.
 
@@ -140,7 +140,7 @@ The note is kept per plan: it comes back when a later session resumes the same p
 | `/waypoint` | Re-read the plan and open the pane (at any width) |
 | `/waypoint close` | Close the pane |
 | `/waypoint refresh` | Re-read the plan and poll tracked PRs now |
-| `/waypoint use <path\|slug>` | Track a plan by path, or by slug in `planDir` |
+| `/waypoint use <path\|slug\|n>` | Track a plan by path, by slug in `planDir`, or by its number `1`–`5` in the recent-plans list; a name that matches no file replies with that list |
 | `/waypoint track <ref>` | Track a PR/MR: a URL, `#n` / `!n` (against this repo), `group/project!n`, or `host/path#n` / `host/path!n` |
 | `/waypoint untrack <ref>` | Stop tracking a PR/MR: any form `track` takes, its label, or its full id (`github.com/o/r#5`) |
 | `/waypoint handoff` | Print the model's current "waiting on you" note |
@@ -173,7 +173,7 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 
 ## What it can reach
 
-- **Reads** the tracked plan file, and lists `planDir` (default `~/.claude/plans`) for the recent-plans picker and `/waypoint use <slug>`.
+- **Reads** the tracked plan file, and lists `planDir` (default `~/.claude/plans`) for the recent-plans picker and `/waypoint use <slug>`. For the picker it also reads the 5 newest plan files there (for their titles) and its own `last:<cwd>` records (for their progress and folder), only when no plan is tracked or on `/waypoint use`.
 - **Reads** the `HOME` environment variable, to expand `~` in paths.
 - **Reads** the session's git `origin` remote through the engine (`$.session.repo`), only to know which host and repo a short `#123` / `!123` (on a `- PR:` line, in `/waypoint track`, or in a `gh pr` / `glab mr` command) belongs to.
 - **Observes** Bash tool calls whose command mentions `gh` or `glab`, from the main session and from subagents alike: the command text and its output, to find PR/MR references. It reads nothing from other Bash calls. From the output it takes only the first PR/MR URL, and only when the command named no PR (`gh pr create`, a bare `gh pr view`). A `--repo` / `-R` value or PR number carrying quotes, commas, `$` or braces (a `gh` call quoted inside a script) is ignored.

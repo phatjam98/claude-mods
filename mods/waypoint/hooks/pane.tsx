@@ -56,8 +56,11 @@ export function drawPane(kit: Kit, _e: PaneEvent, model: PaneModel, actions: Pan
         <Text wrap={T}>No plan tracked. Enter plan mode, or pick a recent plan:</Text>
         {model.recent.length === 0 && <Text dimColor wrap={T}>No plans found in {model.planDir}.</Text>}
         {model.recent.map((r, i) => (
-          <Box key={`recent-${r.path}`} flexDirection="row">
-            <Button key={`pick-${r.path}`} label={`${r.name} · ${r.ago}`} hotkey={String(i + 1)} plain onPress={p => actions.pick(r.path, p)} />
+          <Box key={`recent-${r.path}`} flexDirection="column">
+            <Box flexDirection="row">
+              <Button key={`pick-${r.path}`} label={r.label} hotkey={String(i + 1)} plain onPress={p => actions.pick(r.path, p)} />
+            </Box>
+            {r.where !== null && <Text dimColor wrap={T}>{`   ${r.where}`}</Text>}
           </Box>
         ))}
       </Box>

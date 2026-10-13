@@ -21,7 +21,7 @@ import {
   sweepDrops,
 } from './handoff'
 import type { Kit, PaneActions } from './pane'
-import { parsePlan } from './plan'
+import { parsePlan, planTitle } from './plan'
 import { earlierHandoffSection, HANDOFF_SECTION_ID, planSection, SECTION_ID } from './prompt'
 import {
   applyPoll,
@@ -55,8 +55,8 @@ import {
   classifyError,
 } from './prs/index'
 import type { PollOutcome, PrErrorClass, Toast } from './prs/index'
-import { expandHome, nextSource, normalizePath, resolveUseArg, samePath, shouldResume, storeKey } from './track'
-import { bandQuiet, buildBandModel, buildPaneModel, MAX_RECENT, paneStatusLine, rowBudget, statusText } from './view'
+import { expandHome, isLastKey, nextSource, normalizePath, recordFor, resolveUseArg, samePath, shouldResume, storeKey } from './track'
+import { bandQuiet, buildBandModel, buildPaneModel, orderRecent, paneStatusLine, pickerText, rowBudget, statusText } from './view'
 import type { PaneDraw, RecentPlan } from './view'
 
 // --- state -------------------------------------------------------------------
@@ -69,7 +69,7 @@ const CLI_TIMEOUT_MS = 60_000
 const REPO_TTL_MS = 60_000
 const PANE_SYNC_MS = 5_000
 const USAGE =
-  'Usage: /waypoint [close|refresh|use <path|slug>|track <ref>|untrack <ref>|handoff [clear]|reset|layout [auto|compact|wide]|status]'
+  'Usage: /waypoint [close|refresh|use <path|slug|n>|track <ref>|untrack <ref>|handoff [clear]|reset|layout [auto|compact|wide]|status]'
 
 const EMPTY_UI: WaypointUi = { paneOpen: false, isPlaced: false, layout: null, inPlanMode: false, lastReadAt: 0, lastError: null }
 const EMPTY_PRS: PrsView = { entries: [], lastPolledAt: null, note: '' }
@@ -344,18 +344,62 @@ async function maybeAutoOpen($: EngineInterface): Promise<void> {
   await openPane($)
 }
 
+/** The picker's plans: newest `*.md` in `planDir`, each with its title (read from the file) and its stored progress. */
 async function listRecent($: EngineInterface): Promise<RecentPlan[]> {
+  let files: { name: string; path: string; mtimeMs: number; size: number }[]
   try {
     const dir = normalizePath(expandHome(cfg.planDir, await homeDir($)))
     const entries = await $.fs.list(dir)
-    return entries
-      .filter(f => f.kind === 'file' && /\.md$/i.test(f.name))
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-      .slice(0, MAX_RECENT)
-      .map(f => ({ name: f.name.replace(/\.md$/i, ''), path: `${dir}/${f.name}`, mtimeMs: f.mtimeMs }))
+    files = orderRecent(entries.filter(f => f.kind === 'file' && /\.md$/i.test(f.name))).map(f => ({
+      name: f.name.replace(/\.md$/i, ''),
+      path: `${dir}/${f.name}`,
+      mtimeMs: f.mtimeMs,
+      size: f.size,
+    }))
   } catch {
     return []
   }
+  const records = await lastRecords($)
+  const out: RecentPlan[] = []
+  for (const f of files) {
+    const rec = recordFor(f.path, records)
+    out.push({ name: f.name, path: f.path, mtimeMs: f.mtimeMs, title: await recentTitle($, f.path, f.size), percent: rec?.percent ?? null, cwd: rec?.cwd ?? null })
+  }
+  return out
+}
+
+/** A plan file's display title for the picker; null (the slug shows) when it is too big, unreadable or has none. */
+async function recentTitle($: EngineInterface, path: string, size: number): Promise<string | null> {
+  if (size > MAX_PLAN_BYTES) return null
+  try {
+    return planTitle(await $.fs.read(path))?.displayTitle ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Every stored `last:<cwd>` record, as key and value. */
+async function lastRecords($: EngineInterface): Promise<{ key: string; value: unknown }[]> {
+  const out: { key: string; value: unknown }[] = []
+  try {
+    for (const key of await $.store.keys()) {
+      if (!isLastKey(key)) continue
+      try {
+        out.push({ key, value: await $.store.get(key) })
+      } catch {
+        // skip an unreadable record
+      }
+    }
+  } catch {
+    // no records: the picker shows no progress
+  }
+  return out
+}
+
+/** The picker as text, from a fresh listing; also what the pane draws next. */
+async function pickerReply($: EngineInterface): Promise<string> {
+  recentPlans = await listRecent($)
+  return pickerText(recentPlans, await $.clock.now(), cfg.planDir)
 }
 
 async function resetTracking($: EngineInterface): Promise<void> {
@@ -386,7 +430,7 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
   await $.command.register({
     name: 'waypoint',
     description: 'Plan progress pane',
-    argumentHint: '[close|refresh|use <path>|track <ref>|untrack <ref>|handoff [clear]|reset|layout [auto|compact|wide]|status]',
+    argumentHint: '[close|refresh|use <path|slug|n>|track <ref>|untrack <ref>|handoff [clear]|reset|layout [auto|compact|wide]|status]',
   })
   await registerHandoffTool($)
   try {
@@ -537,9 +581,13 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
     switch (sub) {
       case '': {
         await refresh($, 'force')
-        if (!(await read($, tracked))) recentPlans = await listRecent($)
+        if (await read($, tracked)) {
+          await openPane($)
+          return 'Waypoint opened.'
+        }
+        const picker = await pickerReply($)
         await openPane($)
-        return 'Waypoint opened.'
+        return `Waypoint opened. No plan tracked.\n${picker}`
       }
       case 'close':
         await $.ui.close({ id: PANE_ID })
@@ -552,12 +600,14 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
         const s = await read($, plan)
         if (!t) return 'No plan tracked.'
         if (t.missing) return `Plan file missing: ${t.path}`
-        return s ? `Re-read ${basename(t.path)}: ${doneOf(s)}.` : `Re-read ${basename(t.path)}.`
+        return s ? `Re-read ${s.displayTitle} (${basename(t.path)}): ${doneOf(s)}.` : `Re-read ${basename(t.path)}.`
       }
       case 'use': {
-        if (!arg) return 'Usage: /waypoint use <path|slug>'
-        const p = resolveUseArg(arg, await $.session.cwd(), cfg.planDir, await homeDir($))
-        if (!(await $.fs.exists(p))) return `No plan file at ${p}`
+        if (!arg) return 'Usage: /waypoint use <path|slug|n>'
+        // A picker number (1–5) names the nth recent plan; a slug that happens to be a number still works past the list.
+        const picked = /^[1-9]\d*$/.test(arg) ? (await listRecent($))[Number(arg) - 1] : undefined
+        const p = picked?.path ?? resolveUseArg(arg, await $.session.cwd(), cfg.planDir, await homeDir($))
+        if (!(await $.fs.exists(p))) return `No plan file at ${p}\n${await pickerReply($)}`
         await track($, p, 'manual')
         await refresh($, 'force')
         await openPane($)

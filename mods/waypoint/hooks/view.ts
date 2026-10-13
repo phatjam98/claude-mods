@@ -30,8 +30,10 @@ export type Row =
   /** The current step's checkbox items: one row (`perLine` false), or one row each (wide, when the rows allow). */
   | { kind: 'children'; items: SubItem[]; perLine: boolean }
 
-export type RecentPlan = { name: string; path: string; mtimeMs: number }
-export type RecentRow = { name: string; path: string; ago: string }
+/** A recent plan file for the picker: `name` is the file slug; title, percent and cwd when known. */
+export type RecentPlan = { name: string; path: string; mtimeMs: number; title: string | null; percent: number | null; cwd: string | null }
+/** `label` is the Button label, fitted to the pane; `where` is the dim `in ~/…` line (wide only, cwd known). */
+export type RecentRow = { name: string; path: string; ago: string; label: string; where: string | null }
 
 export type BarModel = { done: string; current: string; currentColor: 'planMode' | 'warning'; rest: string }
 
@@ -121,6 +123,8 @@ export const NARROW_BELOW = 64
 export const INLINE_ROW_CAP = 8
 export const MAX_PR_ROWS = 5
 export const MAX_RECENT = 5
+/** Columns the engine draws before a Button with a hotkey (`n: `). */
+export const HOTKEY_COLUMNS = 3
 export const MAX_HANDOFF_ITEMS = 5
 /** The wide layouts start the handoff summary at this many lines; the fit loop may give some up. */
 export const MAX_SUMMARY_LINES = 6
@@ -164,6 +168,26 @@ export function fmtAgo(now: number, at: number): string {
   const h = Math.floor(m / 60)
   if (h < 24) return `${h}h ago`
   return `${Math.floor(h / 24)}d ago`
+}
+
+/** The recent plans the picker numbers 1–5: newest first, at most `MAX_RECENT`. */
+export function orderRecent<T extends { mtimeMs: number }>(recent: readonly T[]): T[] {
+  return [...recent].sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, MAX_RECENT)
+}
+
+/** A picker label: `<title or slug> · 71% · 36m ago` (percent only when known); the title is cut so the label fits `max`. */
+export function recentLabel(r: { name: string; path: string; title: string | null; percent: number | null }, ago: string, max?: number): string {
+  const tail = `${r.percent === null ? '' : ` · ${r.percent}%`} · ${ago}`
+  const name = r.title || r.name || slugOf(r.path)
+  if (max === undefined) return name + tail
+  return shorten(name, Math.max(4, max - Array.from(tail).length)) + tail
+}
+
+/** The picker as text, for `/waypoint` and `/waypoint use` replies: one `n: label` line per recent plan. */
+export function pickerText(recent: readonly RecentPlan[], now: number, planDir: string): string {
+  const list = orderRecent(recent)
+  if (list.length === 0) return `No plans found in ${planDir}.`
+  return ['Recent plans (/waypoint use <n> to track one):', ...list.map((r, i) => `${i + 1}: ${recentLabel(r, fmtAgo(now, r.mtimeMs))}`)].join('\n')
 }
 
 /** auto → compact when inline or narrower than 44 columns, else wide (narrow below 64, see `isNarrow`). */
@@ -413,7 +437,7 @@ export function paneRows(m: PaneModel): number {
   if (m.kind !== 'plan') {
     const lead = m.handoffLine === null ? 0 : 1
     if (m.kind === 'planning') return lead + 1
-    if (m.kind === 'none-tracked') return lead + 1 + Math.max(1, m.recent.length)
+    if (m.kind === 'none-tracked') return lead + 1 + Math.max(1, m.recent.length) + m.recent.filter(r => r.where !== null).length
     if (m.kind === 'missing') return lead + 2 + (m.lastCounts === null ? 0 : 1)
     return lead + 3
   }
@@ -449,10 +473,23 @@ export function buildPaneModel(input: PaneInput): PaneModel {
 
   if (tracked === null) {
     if (ui.inPlanMode) return { kind: 'planning', handoffLine: hLine }
-    const recent = [...(input.recent ?? [])]
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-      .slice(0, MAX_RECENT)
-      .map(r => ({ name: r.name || slugOf(r.path), path: r.path, ago: fmtAgo(now, r.mtimeMs) }))
+    const wide = chooseLayout(ui.layout ?? input.opts.layout, width, input.placement) === 'wide'
+    const ordered = orderRecent(input.recent ?? [])
+    const budget = input.placement === 'inline' ? Math.min(input.rows, INLINE_ROW_CAP) : input.rows
+    const lead = (hLine === null ? 0 : 1) + 1 + Math.max(1, ordered.length)
+    const withCwd = ordered.filter(r => r.cwd).length
+    // The `in ~/…` lines only in wide, and only when every one of them fits the rows.
+    const showWhere = wide && lead + withCwd <= budget
+    const recent = ordered.map(r => {
+      const ago = fmtAgo(now, r.mtimeMs)
+      return {
+        name: r.name || slugOf(r.path),
+        path: r.path,
+        ago,
+        label: recentLabel(r, ago, width - HOTKEY_COLUMNS),
+        where: showWhere && r.cwd ? shorten(`in ${homePath(r.cwd, input.home)}`, width - HOTKEY_COLUMNS) : null,
+      }
+    })
     return { kind: 'none-tracked', recent, planDir: input.planDir ?? '~/.claude/plans', handoffLine: hLine }
   }
   if (tracked.missing) return { kind: 'missing', path: tracked.path, lastCounts: snap?.counts ?? null, handoffLine: hLine }

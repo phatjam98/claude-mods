@@ -87,3 +87,28 @@ export function nextSource(
   if (samePath(current.path, incoming.path, home)) return 'same'
   return RANK[incoming.source] >= RANK[current.source] ? 'replace' : 'keep'
 }
+
+const LAST_PREFIX = storeKey('')
+/** A store key holding a `last:<cwd>` record. */
+export const isLastKey = (key: string): boolean => key.startsWith(LAST_PREFIX)
+
+/**
+ * The stored `last:<cwd>` record for `path` among `records` (key, value pairs): the newest by `at` wins.
+ * Gives its percent (null when not a number) and the cwd from its key.
+ */
+export function recordFor(
+  path: string,
+  records: { key: string; value: unknown }[],
+): { percent: number | null; cwd: string } | null {
+  let best: { at: number; percent: number | null; cwd: string } | null = null
+  for (const { key, value } of records) {
+    if (!isLastKey(key) || !value || typeof value !== 'object') continue
+    const r = value as Partial<StoredPlan>
+    if (typeof r.path !== 'string' || !samePath(r.path, path)) continue
+    const at = typeof r.at === 'number' ? r.at : 0
+    if (best !== null && best.at >= at) continue
+    const percent = typeof r.percent === 'number' && Number.isFinite(r.percent) ? r.percent : null
+    best = { at, percent, cwd: key.slice(LAST_PREFIX.length) }
+  }
+  return best === null ? null : { percent: best.percent, cwd: best.cwd }
+}

@@ -12,6 +12,7 @@
 - "Waiting on you" section for the handoff note: when it was left, the summary wrapped to 6 lines at most (fewer when rows are tight), and one line per item (`!` when blocking) with a link when it names a tracked PR/MR or a URL. Compact draws it as one line; it and the PR section keep their rows before the step list gives up its own.
 - The band reads `⚑ waiting on you (n) · …` in warning colour and the status line adds ` · needs you` while a handoff note is up.
 - Footer shows the plan path with `~` for the home folder and when the plan file last changed (was: when it was last read).
+- The recent-plans picker shows each plan's title and progress (`claude-mods repo + waypoint · 71% · 36m ago`, with `in ~/src/claude-mods` under it in the wide layout), not the file slug; `/waypoint` prints the same numbered list, `/waypoint use <n>` tracks the nth plan, `/waypoint use` with an unknown name replies with the list, and `/waypoint refresh` names the plan by its title.
 - The docked pane asks for 48 columns (`paneColumns`) and the sectioned layout adapts from 44 columns up (one-space indents, PR rows without buttons, a two-row footer); compact is for inline and narrower.
 
 ## 0.1.0 — 2026-10-12

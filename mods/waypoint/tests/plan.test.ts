@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { MAX_BYTES, cleanTitle, hashText, isNonStep, isStepLike, normalize, parsePlan, shortLabel } from '../hooks/plan'
+import { MAX_BYTES, cleanTitle, hashText, isNonStep, isStepLike, normalize, parsePlan, planTitle, shortLabel } from '../hooks/plan'
 import {
   CHECKBOX_ONLY,
   DUPLICATE_TITLES,
@@ -223,4 +223,13 @@ test('shortLabel and hashText', () => {
   expect(shortLabel('Write docs', 4)).toEqual({ short: '5', title: 'Write docs' })
   expect(hashText('')).toBe('811c9dc5')
   expect(hashText('a')).toBe('e40c292c')
+})
+
+test('planTitle: the first # heading outside fences, `Plan:` stripped; else a short first line; else null', () => {
+  expect(planTitle('```\n# not this\n```\n# Plan: ship the widget\n\n## A\n')).toEqual({ title: 'Plan: ship the widget', displayTitle: 'ship the widget' })
+  expect(planTitle('﻿Fix the **login** bug\r\n\r\n## Steps\r\n')).toEqual({ title: 'Fix the login bug', displayTitle: 'Fix the login bug' })
+  expect(planTitle('## Only sections\n\n' + 'x'.repeat(100))).toBe(null)
+  expect(planTitle('')).toBe(null)
+  const p = parsePlan('# Plan: ship it\n', { path: '/p/a.md', mtimeMs: 0, now: 0 })
+  expect(planTitle('# Plan: ship it\n')).toEqual({ title: p.title, displayTitle: p.displayTitle })
 })

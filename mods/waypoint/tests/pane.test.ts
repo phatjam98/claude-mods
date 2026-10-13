@@ -42,7 +42,11 @@ function world(on: any, files: Record<string, string> = {}, run?: () => { exitCo
   )
   on('fs.read', (_: any, e: any) => (e.path in fs ? { value: fs[e.path] } : { deny: 'ENOENT' }))
   on('fs.exists', (_: any, e: any) => ({ value: e.path in fs }))
-  on('fs.list', () => ({ value: [] }))
+  on('fs.list', (_: any, e: any) => {
+    const dir = e.path.replace(/\/$/, '') + '/'
+    const names = Object.keys(fs).filter(p => p.startsWith(dir) && !p.slice(dir.length).includes('/'))
+    return { value: names.map(p => ({ name: p.slice(dir.length), kind: 'file', size: fs[p]!.length, mtimeMs: NOW - 36 * 60_000, isLink: false })) }
+  })
   on('process.run', () => ({
     value: { ...(run ? run() : { exitCode: 0, stdout: JSON.stringify(gh.failing), stderr: '' }), isStdoutTruncated: false, isStderrTruncated: false },
   }))
@@ -526,4 +530,36 @@ test('narrow dock at 48 columns, 10..30 rows: drawn rows never exceed the budget
     expect(text.some(l => /#13/.test(l))).toBe(true)
     await ui.unmount()
   }
+})
+
+/** Every Text node in a drawn tree whose own text matches `re`, with its props. */
+function texts(node: any, re: RegExp, out: any[] = []): any[] {
+  if (node === null || typeof node !== 'object') return out
+  const kids: any[] = (Array.isArray(node.children) ? node.children : [node.children]).flat(Infinity)
+  if (node.type === 'Text' && re.test(kids.filter(k => typeof k === 'string' || typeof k === 'number').join(''))) out.push(node)
+  for (const k of kids) texts(k, re, out)
+  return out
+}
+
+test('nothing tracked: the picker shows the plan title and progress, not the slug; wide adds a dim `in ~/…` line', async ($, on) => {
+  const SLUG = `${HOME}/.claude/plans/we-are-going-to-purring-origami.md`
+  const store = { [`last:${HOME}/src/claude-mods`]: { path: SLUG, title: 'x', at: NOW, percent: 71, sessionId: 'S0' } }
+  world(on, { [SLUG]: '# claude-mods repo + waypoint, a plan-progress pane mod\n' }, undefined, store)
+  await command($, '')
+  const wide = await mountPane($, 'terminal', 80)
+  const lines = plain(await wide.drawn(), 80)
+  expect(lines).toContain('1: claude-mods repo + waypoint, a plan-progress pane mod · 71% · 36m ago')
+  expect(lines).toContain('   in ~/src/claude-mods')
+  expect(lines.some(l => /purring-origami/.test(l))).toBe(false)
+  const where = texts(await wide.drawn(), /in ~\/src\/claude-mods/)
+  expect(where.length).toBe(1)
+  expect(where[0].props.dimColor).toBe(true)
+  await wide.unmount()
+  const compact = await mountPane($, 'terminal', 40)
+  const cl = plain(await compact.drawn(), 40)
+  const row = cl.find(l => l.startsWith('1: '))!
+  expect(row).toBe('1: claude-mods repo + w… · 71% · 36m ago')
+  expect(Array.from(row).length).toBe(40)
+  expect(cl.some(l => /in ~\//.test(l))).toBe(false)
+  await compact.unmount()
 })

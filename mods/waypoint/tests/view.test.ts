@@ -15,6 +15,8 @@ import {
   homePath,
   MAX_PR_ROWS,
   paneRows,
+  pickerText,
+  recentLabel,
   resolveRef,
   ruleTail,
   wrapSummary,
@@ -359,14 +361,55 @@ test('buildPaneModel PR section (wide): attention first, other open PRs after, m
 })
 
 test('buildPaneModel none-tracked: up to 5 recent plans, newest first', () => {
-  const recent = [1, 2, 3, 4, 5, 6].map(i => ({ name: `plan-${i}`, path: `/p/plan-${i}.md`, mtimeMs: NOW - i * 3_600_000 }))
+  const recent = [1, 2, 3, 4, 5, 6].map(i => ({ name: `plan-${i}`, path: `/p/plan-${i}.md`, mtimeMs: NOW - i * 3_600_000, title: null, percent: null, cwd: null }))
   const m = buildPaneModel(input({ tracked: null, snap: null, recent: [...recent].reverse() }))
   if (m.kind !== 'none-tracked') throw new Error(m.kind)
   expect(m.recent.length).toBe(5)
-  expect(m.recent[0]).toEqual({ name: 'plan-1', path: '/p/plan-1.md', ago: '1h ago' })
+  expect(m.recent[0]).toEqual({ name: 'plan-1', path: '/p/plan-1.md', ago: '1h ago', label: 'plan-1 · 1h ago', where: null })
   expect(m.planDir).toBe('~/.claude/plans')
   const custom = buildPaneModel(input({ tracked: null, snap: null, planDir: '~/work/plans' }))
   expect(custom.kind === 'none-tracked' && custom.planDir).toBe('~/work/plans')
+})
+
+const TITLED = {
+  name: 'purring-origami',
+  path: '/home/t/.claude/plans/purring-origami.md',
+  mtimeMs: NOW - 36 * 60_000,
+  title: 'claude-mods repo + waypoint, a plan-progress pane mod',
+  percent: 71,
+  cwd: '/home/t/src/claude-mods',
+}
+
+test('recentLabel: title (else slug), percent when known, age; the title is cut to fit', () => {
+  expect(recentLabel(TITLED, '36m ago')).toBe('claude-mods repo + waypoint, a plan-progress pane mod · 71% · 36m ago')
+  expect(recentLabel({ ...TITLED, title: null, percent: null }, '36m ago')).toBe('purring-origami · 36m ago')
+  const cut = recentLabel(TITLED, '36m ago', 37)
+  expect(cut).toBe('claude-mods repo + w… · 71% · 36m ago')
+  expect(Array.from(cut).length).toBe(37)
+})
+
+test('pickerText: numbered labels newest first, or where no plans were found', () => {
+  const older = { ...TITLED, name: 'steady-hellman', path: '/p/steady-hellman.md', mtimeMs: NOW - 3 * 3_600_000, title: null, percent: null, cwd: null }
+  expect(pickerText([older, TITLED], NOW, '~/.claude/plans')).toBe(
+    [
+      'Recent plans (/waypoint use <n> to track one):',
+      '1: claude-mods repo + waypoint, a plan-progress pane mod · 71% · 36m ago',
+      '2: steady-hellman · 3h ago',
+    ].join('\n'),
+  )
+  expect(pickerText([], NOW, '~/.claude/plans')).toBe('No plans found in ~/.claude/plans.')
+})
+
+test('buildPaneModel none-tracked: labels fit the width minus the hotkey; `in ~/…` only in wide with rows to spare', () => {
+  const wide = buildPaneModel(input({ tracked: null, snap: null, recent: [TITLED], bodyColumns: 40, home: '/home/t', ui: { ...UI, layout: 'wide' } }))
+  if (wide.kind !== 'none-tracked') throw new Error(wide.kind)
+  expect(Array.from(wide.recent[0]!.label).length).toBe(37)
+  expect(wide.recent[0]!.where).toBe('in ~/src/claude-mods')
+  expect(paneRows(wide)).toBe(3)
+  const compact = buildPaneModel(input({ tracked: null, snap: null, recent: [TITLED], bodyColumns: 40, placement: 'inline', rows: 6 }))
+  expect(compact.kind === 'none-tracked' && compact.recent[0]!.where).toBe(null)
+  const tight = buildPaneModel(input({ tracked: null, snap: null, recent: [TITLED], bodyColumns: 90, rows: 2 }))
+  expect(tight.kind === 'none-tracked' && tight.recent[0]!.where).toBe(null)
 })
 
 test('buildPaneModel planning: in plan mode with nothing tracked, or tracked before the file exists', () => {

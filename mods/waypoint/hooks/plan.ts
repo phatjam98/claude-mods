@@ -333,7 +333,8 @@ function withIds(drafts: Draft[]): Step[] {
   })
 }
 
-function planTitle(scan: Scan, path: string): string {
+/** The first `#` heading outside fences, else the first short (≤ 80) non-heading line before any other text; null when neither. */
+function scanTitle(scan: Scan): string | null {
   const h1 = scan.headings.find(h => h.depth === 1)
   if (h1 && h1.text) return h1.text
   for (let i = 0; i < scan.lines.length; i++) {
@@ -343,6 +344,20 @@ function planTitle(scan: Scan, path: string): string {
     if (t && t.length <= 80) return t
     break
   }
+  return null
+}
+
+const displayOf = (title: string): string => title.replace(/^plan:\s*/i, '') || title
+
+/** A plan file's title as the parser takes it (`displayTitle` without a `Plan:` prefix); null when the text has none. */
+export function planTitle(raw: string): { title: string; displayTitle: string } | null {
+  const title = scanTitle(scanHeadings(normalize(raw).text))
+  return title === null ? null : { title, displayTitle: displayOf(title) }
+}
+
+function titleOf(scan: Scan, path: string): string {
+  const t = scanTitle(scan)
+  if (t !== null) return t
   const base = path.split('/').pop() ?? path
   return base.replace(/\.md$/i, '') || path
 }
@@ -368,11 +383,11 @@ export function parsePlan(raw: string, opts: { path: string; mtimeMs: number; no
   const first = (st: StepStatus): number | null => steps.find(s => s.status === st)?.index ?? null
   const currentIndex = first('active') ?? first('blocked') ?? first('pending')
 
-  const title = planTitle(scan, opts.path)
+  const title = titleOf(scan, opts.path)
   return {
     path: opts.path,
     title,
-    displayTitle: title.replace(/^plan:\s*/i, '') || title,
+    displayTitle: displayOf(title),
     steps,
     mode,
     stepDepth: sel.depth,
