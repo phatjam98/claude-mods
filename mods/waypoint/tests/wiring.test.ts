@@ -120,7 +120,7 @@ test('a subagent plan_mode attachment is ignored', async ($, on) => {
   const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
   await planMode($, PLAN, true, { agentId: 'a1' })
   expect(w.reads).toEqual([])
-  expect((await command($, 'status')).text).toBe('waypoint: no plan tracked')
+  expect((await command($, 'status')).text.split('\n')[0]).toBe('waypoint: no plan tracked')
 })
 
 test('Edit on the tracked path re-parses; another path, a subagent edit and a failed edit do not', async ($, on) => {
@@ -152,11 +152,11 @@ test('ExitPlanMode result filePath tracks the plan; an errored call does not', a
   })
   const ran = await $.tool.call({ tool: 'ExitPlanMode', tool_use_id: 'x1' } as any)
   expect(ran.isError).toBe(true)
-  expect((await command($, 'status')).text).toBe('waypoint: no plan tracked')
+  expect((await command($, 'status')).text.split('\n')[0]).toBe('waypoint: no plan tracked')
   isError = false
   await $.tool.call({ tool: 'ExitPlanMode', tool_use_id: 'x2' } as any)
   expect(w.reads).toEqual([PLAN])
-  expect((await command($, 'status')).text).toBe('waypoint: ship the widget · 3/9 done · current WP3')
+  expect((await command($, 'status')).text.split('\n')[0]).toBe('waypoint: ship the widget · 3/9 done · current WP3')
 })
 
 test('manual tracking outranks plan mode; plan mode outranks a resumed plan', async ($, on) => {
@@ -193,7 +193,7 @@ test('resume: a missing file deletes the key', async ($, on) => {
   const w = world(on, { store: { 'last:/work': rec(10) } })
   await start($)
   expect('last:/work' in w.store).toBe(false)
-  expect((await command($, 'status')).text).toBe('waypoint: no plan tracked')
+  expect((await command($, 'status')).text.split('\n')[0]).toBe('waypoint: no plan tracked')
 })
 
 test('resume: a complete plan touched within 24 h comes back', async ($, on) => {
@@ -253,7 +253,7 @@ test('/waypoint layout persists; status summarises; unknown is usage', async ($,
   expect((await command($, 'layout wide')).text).toBe('Waypoint layout: wide.')
   expect(w.store.layout).toBe('wide')
   expect((await command($, 'layout sideways')).text).toContain('Usage: /waypoint layout')
-  expect((await command($, 'status')).text).toBe('waypoint: no plan tracked')
+  expect((await command($, 'status')).text.split('\n')[0]).toBe('waypoint: no plan tracked')
   expect((await command($, 'frobnicate')).text).toMatch(/^Usage: \/waypoint \[close\|refresh/)
   expect((await command($, 'layout')).text).toBe('Waypoint layout: auto (from settings).')
   expect('layout' in w.store).toBe(false)
@@ -437,4 +437,39 @@ test('paneColumns is clamped to 40..200 whole columns', { options: { paneColumns
   const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
   await command($, 'use purring-origami')
   expect(w.opens[0]).toMatchObject({ columns: 40 })
+})
+
+test('/waypoint status: `pane: not placed` before the pane is drawn', async ($, on) => {
+  world(on)
+  expect((await command($, 'status')).text).toBe('waypoint: no plan tracked\npane: not placed')
+})
+
+test('/waypoint status reports where the pane was drawn and the width asked', async ($, on) => {
+  world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  await command($, 'use purring-origami')
+  const ui = await $.ui.mount({
+    plugin: 'waypoint',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'waypoint',
+    props: { bodyColumns: 76, placement: 'dock', scroll: { bodyRows: 30 } } as any,
+  })
+  const lines = (await command($, 'status')).text.split('\n')
+  expect(lines).toHaveLength(2)
+  expect(lines[1]).toBe('pane: dock · 76 columns (asked 48)')
+  await ui.unmount()
+})
+
+test('/waypoint status with paneColumns 0 says the engine share', { options: { paneColumns: 0 } }, async ($, on) => {
+  world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  await command($, 'use purring-origami')
+  const ui = await $.ui.mount({
+    plugin: 'waypoint',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'waypoint',
+    props: { bodyColumns: 64, placement: 'inline', scroll: { bodyRows: 10 } } as any,
+  })
+  expect((await command($, 'status')).text.split('\n')[1]).toBe('pane: inline · 64 columns (asked engine share)')
+  await ui.unmount()
 })

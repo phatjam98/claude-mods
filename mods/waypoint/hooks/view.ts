@@ -44,7 +44,7 @@ export type HandoffSection = {
   fromEarlier: boolean
   /** Drawn as `line` alone (compact layout, or wide out of rows). */
   compact: boolean
-  /** The summary pre-wrapped to width − 2, at most 4 lines. */
+  /** The summary pre-wrapped to width − 2, at most 6 lines (fewer when rows are tight); a cut last line ends in `…`. */
   summary: string[]
   items: HandoffLine[]
   more: number
@@ -122,7 +122,8 @@ export const INLINE_ROW_CAP = 8
 export const MAX_PR_ROWS = 5
 export const MAX_RECENT = 5
 export const MAX_HANDOFF_ITEMS = 5
-export const MAX_SUMMARY_LINES = 4
+/** The wide layouts start the handoff summary at this many lines; the fit loop may give some up. */
+export const MAX_SUMMARY_LINES = 6
 export const MAX_CHILD_LINES = 8
 
 /** Rows the current step's children take drawn one per line: up to 8, then one `+n more` row. */
@@ -273,6 +274,18 @@ export function wrapSummary(text: string, width: number, maxLines = MAX_SUMMARY_
   const last = Array.from(kept[max - 1] ?? '')
   kept[max - 1] = (last.length < w ? last.join('').trimEnd() : last.slice(0, w - 1).join('').trimEnd()) + '…'
   return kept
+}
+
+/** Where the engine last drew the pane, as the `Pane` render props said. */
+export type PaneDraw = { placement: 'dock' | 'inline'; bodyColumns: number }
+
+/**
+ * `/waypoint status`'s pane line: `pane: dock · 76 columns (asked 48)`, `(asked engine share)`
+ * with no `paneColumns`, or `pane: not placed` while the pane is closed, waiting or never drawn.
+ */
+export function paneStatusLine(draw: PaneDraw | null, isPlaced: boolean, asked: number | undefined): string {
+  if (!isPlaced || draw === null) return 'pane: not placed'
+  return `pane: ${draw.placement} · ${draw.bodyColumns} columns (asked ${asked ?? 'engine share'})`
 }
 
 const prPhrase = (n: number): string => (n === 1 ? '1 PR needs you' : `${n} PRs need you`)
@@ -459,7 +472,8 @@ export function buildPaneModel(input: PaneInput): PaneModel {
   const hot = open.filter(r => (byId.get(r.id)?.attention ?? null) !== null)
   const cold = open.filter(r => (byId.get(r.id)?.attention ?? null) === null)
   const ordered = [...hot, ...cold]
-  const allSummary = h === null ? [] : wrapSummary(h.summary, narrow ? width - 1 : width - 2)
+  const summaryWidth = narrow ? width - 1 : width - 2
+  const allSummary = h === null ? [] : wrapSummary(h.summary, summaryWidth, MAX_SUMMARY_LINES)
 
   // What the sections may take; given up step by step (below) to keep a few steps in view.
   const fit = {
@@ -494,7 +508,9 @@ export function buildPaneModel(input: PaneInput): PaneModel {
     const shown = ordered.slice(0, fit.prShown)
     let ho: HandoffSection | null = null
     if (h !== null) {
-      ho = handoffSection(h, now, width, allSummary.slice(0, fit.summaryShown), fit.itemsShown, input.prRows, fromEarlier, narrow)
+      // Fewer lines than wrapped: re-wrap to that many, so the cut last line keeps its `…`.
+      const summary = fit.summaryShown < allSummary.length ? wrapSummary(h.summary, summaryWidth, fit.summaryShown) : allSummary
+      ho = handoffSection(h, now, width, summary, fit.itemsShown, input.prRows, fromEarlier, narrow)
       if (fit.handoffCompact) ho = { ...ho, compact: true, summary: [], items: [], more: 0 }
       else if (!fit.handoffMore) ho = { ...ho, more: 0 }
     }

@@ -249,7 +249,7 @@ function plain(node: any, width: number): string[] {
     const c: any[] = (Array.isArray(n.children) ? n.children : [n.children]).flat(Infinity)
     const q = n.props ?? {}
     if (n.type === 'Link') return q.label ?? q.href
-    if (n.type === 'Button') return q.hotkey ? `${q.hotkey} ${q.label}` : q.label
+    if (n.type === 'Button') return q.hotkey ? `${q.hotkey}: ${q.label}` : q.label
     if (n.type === 'Text') return c.map(inline).join('')
     if (n.type === 'Box') {
       const parts = c.map(inline).filter(s => s !== '')
@@ -266,7 +266,7 @@ function plain(node: any, width: number): string[] {
   return [inline(node)]
 }
 
-test('handoff: wide section with summary ≤ 4 lines and items; compact one-liner; band; status', async ($, on) => {
+test('handoff: wide section with summary ≤ 6 lines and items; compact one-liner; band; status', async ($, on) => {
   const w = world(on, { [PLAN]: NINE })
   await start($)
   await planMode($)
@@ -277,7 +277,7 @@ test('handoff: wide section with summary ≤ 4 lines and items; compact one-line
     let ui = await mountPane($, surface, 92)
     expect(await ui.find({ type: 'Text', text: /^Waiting on you · 0s ago$/ })).toBeDefined()
     const summary = await ui.findAll({ type: 'Text', text: /^  (PR #1 is verified|.*merge|.*marketplace|.*README)/ })
-    expect(summary.length >= 2 && summary.length <= 4).toBe(true)
+    expect(summary.length >= 2 && summary.length <= 6).toBe(true)
     expect(summary.every((t: { text: string }) => Array.from(t.text).length <= 92)).toBe(true)
     expect(await ui.find({ type: 'Text', text: 'Mark PR #13 ready and merge?' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^decision *$/ })).toBeDefined()
@@ -447,6 +447,26 @@ test('wide rules: a tight budget draws the children in one row, and drops the ga
   await ui.unmount()
 })
 
+test('wide footer at 76 and 92 columns: two blanks or more between the left text and the hotkeys, no row over W', async ($, on) => {
+  const w = world(on, { [PLAN]: NINE6 })
+  await start($)
+  await planMode($)
+  await w.clock.advance(7 * 60_000)
+  for (const cols of [76, 92]) {
+    const { ui, text } = await mountAt($, cols, 40)
+    expect(text.filter(l => Array.from(l).length > cols)).toEqual([])
+    const footer = text.at(-1)!
+    expect(footer).toMatch(/ago {2,}r: refresh · p: path · c: close$/)
+    expect(Array.from(footer).length).toBe(cols)
+    await ui.unmount()
+  }
+  // A long path is cut, never the gap.
+  const { ui, text } = await mountAt($, 64, 40)
+  expect(text.at(-1)).toMatch(/^  ~\/\.claude\/.*… · changed 7m ago {2,}r: refresh/)
+  expect(Array.from(text.at(-1)!).length <= 64).toBe(true)
+  await ui.unmount()
+})
+
 // --- 0.2: the narrow dock (48 columns): the sectioned layout, adapted ---
 
 test('narrow dock at 48 columns: sectioned layout, no PR buttons, two-row footer, every row ≤ 48 cells', async ($, on) => {
@@ -484,7 +504,7 @@ test('narrow dock at 48 columns: sectioned layout, no PR buttons, two-row footer
     // The footer: the path row, then the hotkeys on their own row.
     expect(text.at(-2)).toMatch(/^ ~\/\.claude\/plans\/purring-origami\.md · changed 1…$/)
     expect(Array.from(text.at(-2)!).length).toBe(48)
-    expect(text.at(-1)).toBe(' r refresh · p path · c close')
+    expect(text.at(-1)).toBe(' r: refresh · p: path · c: close')
     await ui.unmount()
   }
 })

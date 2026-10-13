@@ -56,8 +56,8 @@ import {
 } from './prs/index'
 import type { PollOutcome, PrErrorClass, Toast } from './prs/index'
 import { expandHome, nextSource, normalizePath, resolveUseArg, samePath, shouldResume, storeKey } from './track'
-import { bandQuiet, buildBandModel, buildPaneModel, MAX_RECENT, rowBudget, statusText } from './view'
-import type { RecentPlan } from './view'
+import { bandQuiet, buildBandModel, buildPaneModel, MAX_RECENT, paneStatusLine, rowBudget, statusText } from './view'
+import type { PaneDraw, RecentPlan } from './view'
 
 // --- state -------------------------------------------------------------------
 
@@ -142,6 +142,8 @@ let lastStatus: string | undefined | null = null // null: never sent
 let repoCache: { at: number; repo: RepoRef | null } | null = null
 let ticking = false
 let recentPlans: RecentPlan[] = []
+/** The last Pane render's placement and body width; module memory, since render hooks never write state. */
+let lastPaneDraw: PaneDraw | null = null
 
 const bg = (p: Promise<unknown>): void => {
   p.catch(() => {})
@@ -503,6 +505,16 @@ async function summary($: EngineInterface): Promise<string> {
   return `waypoint: ${s.displayTitle} · ${doneOf(s)}${curPart}${prPart}`
 }
 
+async function paneStatus($: EngineInterface): Promise<string> {
+  let isPlaced = false
+  try {
+    isPlaced = (await $.ui.panes()).some(p => p.id === PANE_ID && p.isPlaced)
+  } catch {
+    // diagnostics only
+  }
+  return paneStatusLine(lastPaneDraw, isPlaced, cfg.paneColumns)
+}
+
 async function runCommand($: EngineInterface, args: string): Promise<string> {
   const [sub = '', ...rest] = args.trim().split(/\s+/)
   const arg = rest.join(' ')
@@ -565,7 +577,7 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
         return `Waypoint layout: ${arg}.`
       }
       case 'status':
-        return await summary($)
+        return `${await summary($)}\n${await paneStatus($)}`
       default:
         return USAGE
     }
@@ -1020,6 +1032,7 @@ function makeActions($: EngineInterface): PaneActions {
 
 async function paneHook($: EngineInterface, e: RenderInput<'Pane'>): Promise<RenderElement> {
   const el = $.ui.resolve(e)
+  lastPaneDraw = { placement: e.props.placement, bodyColumns: e.props.bodyColumns }
   try {
     return await paneBody($, e, el)
   } catch (err) {

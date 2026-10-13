@@ -144,7 +144,7 @@ test('a rejected tool.register never breaks session.start', async ($, on) => {
   world(on, { registerFails: true })
   const r = await start($)
   expect(r).toMatchObject({ cwd: '/work' })
-  expect(await command($, 'status')).toBe('waypoint: no plan tracked')
+  expect(await command($, 'status')).toBe('waypoint: no plan tracked\npane: not placed')
 })
 
 test('the tool sets the note, stores it under the session key and toasts; clear nulls it without a toast', async ($, on) => {

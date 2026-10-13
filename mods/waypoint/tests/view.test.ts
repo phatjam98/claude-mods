@@ -18,6 +18,7 @@ import {
   resolveRef,
   ruleTail,
   wrapSummary,
+  paneStatusLine,
   shorten,
   statusText,
 } from '../hooks/view'
@@ -124,14 +125,19 @@ test('bar: blocked current is a warning; nothing done leaves no done span; compl
   expect(bar(0, 200, 'active', 40).current.length).toBe(1)
 })
 
-test('wrapSummary: wraps on words to the width, at most 4 lines, the last cut with …', () => {
+test('wrapSummary: wraps on words to the width, at most maxLines lines (6 by default), the last cut with …', () => {
   expect(wrapSummary('one two three', 20)).toEqual(['one two three'])
   expect(wrapSummary('aaa bbb ccc', 7)).toEqual(['aaa bbb', 'ccc'])
   const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ')
   const lines = wrapSummary(long, 30)
-  expect(lines.length).toBe(4)
+  expect(lines.length).toBe(6)
   expect(lines.every(l => Array.from(l).length <= 30)).toBe(true)
-  expect(lines[3]!.endsWith('…')).toBe(true)
+  expect(lines[5]!.endsWith('…')).toBe(true)
+  const four = wrapSummary(long, 30, 4)
+  expect(four.length).toBe(4)
+  expect(four.slice(0, 3)).toEqual(lines.slice(0, 3))
+  expect(four[3]!.endsWith('…')).toBe(true)
+  expect(wrapSummary(long, 30, 1)).toHaveLength(1)
   expect(wrapSummary('x'.repeat(25), 10)).toEqual(['x'.repeat(10), 'x'.repeat(10), 'x'.repeat(5)])
   expect(wrapSummary('  spaced\n\nout   text ', 40)).toEqual(['spaced out text'])
   expect(wrapSummary('', 40)).toEqual([])
@@ -434,20 +440,44 @@ const HANDOFF: Handoff = {
   sessionId: 'S1',
 }
 
-test('buildPaneModel handoff (wide): ago, summary wrapped to width − 2 in ≤ 4 lines, items with refs', () => {
+test('buildPaneModel handoff (wide): ago, summary wrapped to width − 2 in ≤ 6 lines, items with refs', () => {
   const e = { id: 'github.com/a/r#1', attention: null, state: 'open' } as unknown as PrEntry
   const prRows: PrRow[] = [{ glyph: '○', label: '#1', repoName: 'r', branch: 'b', status: 'draft', color: 'subtle', url: 'https://github.com/a/r/pull/1', id: e.id, title: 'feat: x' }]
   const m = buildPaneModel(input({ handoff: HANDOFF, prs: { entries: [e], lastPolledAt: NOW - 3000, note: '' }, prRows }))
   if (m.kind !== 'plan') throw new Error(m.kind)
   const h = m.handoff!
   expect(h.ago).toBe('12m ago')
-  expect(h.summary.length <= 4 && h.summary.length >= 2).toBe(true)
+  expect(h.summary.length <= 6 && h.summary.length >= 2).toBe(true)
   expect(h.summary.every(l => Array.from(l).length <= 88)).toBe(true)
   expect(h.items[0]).toEqual({ blocking: true, kind: 'decision', title: 'Mark PR #1 ready and merge?', ref: { text: '#1', href: 'https://github.com/a/r/pull/1' } })
   expect(h.items[1]!.kind).toBe('action  ')
   expect(h.items[1]!.ref).toBe(null)
   expect(h.line).toBe('! waiting on you · Mark PR #1 ready and merge? (+1)')
   expect(m.prSection!.head).toEqual({ before: ' · 1 open · ', need: 'none need you', hot: false, after: ' · polled 3s ago' })
+})
+
+test('buildPaneModel summary at 76 columns: 6 lines with a generous budget, fewer when rows are tight, the cut line keeps …', () => {
+  const long: Handoff = { ...HANDOFF, summary: Array.from({ length: 4 }, () => HANDOFF.summary).join(' ') }
+  const roomy = buildPaneModel(input({ bodyColumns: 76, rows: 60, handoff: long }))
+  if (roomy.kind !== 'plan') throw new Error(roomy.kind)
+  expect(roomy.layout).toBe('wide')
+  expect(roomy.handoff!.summary.length).toBe(6)
+  expect(roomy.handoff!.summary.every(l => Array.from(l).length <= 74)).toBe(true)
+  expect(roomy.handoff!.summary[5]!.endsWith('…')).toBe(true)
+  const short = buildPaneModel(input({ bodyColumns: 76, rows: 60, handoff: { ...HANDOFF, summary: 'Two words.' } }))
+  if (short.kind !== 'plan') throw new Error(short.kind)
+  expect(short.handoff!.summary).toEqual(['Two words.'])
+  for (let rows = 12; rows <= 20; rows++) {
+    const m = buildPaneModel(input({ bodyColumns: 76, rows, handoff: long }))
+    if (m.kind !== 'plan') throw new Error(m.kind)
+    if (m.handoff!.compact) continue
+    const n = m.handoff!.summary.length
+    expect({ rows, ok: n >= 1 && n <= 6 && paneRows(m) <= rows }).toEqual({ rows, ok: true })
+    expect({ rows, cut: m.handoff!.summary[n - 1]!.endsWith('…') }).toEqual({ rows, cut: true })
+  }
+  const tight = buildPaneModel(input({ bodyColumns: 76, rows: 14, handoff: long }))
+  if (tight.kind !== 'plan') throw new Error(tight.kind)
+  expect(tight.handoff!.summary.length <= 4).toBe(true)
 })
 
 test('buildPaneModel row budget: handoff and PRs keep their rows, steps shrink, current stays', () => {
@@ -591,4 +621,11 @@ test('narrow (44–63 columns): header `WP2 · 2/9 · 22%`; PR head drops `none 
   expect(paneRows(m)).toBe(2 + 1 + 9 + 4)
   const roomy = buildPaneModel(input({ bodyColumns: 64, rows: 40 }))
   expect(roomy.kind === 'plan' && roomy.narrow).toBe(false)
+})
+
+test('paneStatusLine: placement, drawn width and the width asked; not placed otherwise', () => {
+  expect(paneStatusLine({ placement: 'dock', bodyColumns: 76 }, true, 48)).toBe('pane: dock · 76 columns (asked 48)')
+  expect(paneStatusLine({ placement: 'inline', bodyColumns: 80 }, true, undefined)).toBe('pane: inline · 80 columns (asked engine share)')
+  expect(paneStatusLine({ placement: 'dock', bodyColumns: 76 }, false, 48)).toBe('pane: not placed')
+  expect(paneStatusLine(null, true, 48)).toBe('pane: not placed')
 })

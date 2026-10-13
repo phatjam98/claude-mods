@@ -24,6 +24,11 @@ export type Kit = ReturnType<EngineInterface['ui']['resolve']>
 
 const T = 'truncate-end' as const
 
+/** The wide footer's hotkeys as the engine draws them: `r: refresh · p: path · c: close`. */
+export const FOOTER_KEYS_WIDTH = 31
+/** The least blank between the wide footer's left text and its hotkeys. */
+export const FOOTER_GAP = 2
+
 export function drawPane(kit: Kit, _e: PaneEvent, model: PaneModel, actions: PaneActions): RenderElement {
   const { Box, Text, Button, Link } = kit
 
@@ -266,16 +271,21 @@ export function drawPane(kit: Kit, _e: PaneEvent, model: PaneModel, actions: Pan
         </Box>,
         hotkeys,
       )
-    } else lines.push(
-      <Box key="footer" flexDirection="row" justifyContent="space-between">
-        {f.error !== null ? (
-          <Text color="warning" wrap={T}>  ⚠ {f.error}</Text>
-        ) : (
-          <Text dimColor wrap={T}>  {shorten(f.path, Math.max(8, W - 50))} · changed {f.changedAgo}</Text>
-        )}
-        {hotkeys}
-      </Box>,
-    )
+    } else {
+      // One row: the left text, a spacer of at least FOOTER_GAP, then the hotkeys
+      // (FOOTER_KEYS_WIDTH as the engine draws them). The left text is cut to fit.
+      const left = W - FOOTER_KEYS_WIDTH - FOOTER_GAP - 2
+      const suffix = ` · changed ${f.changedAgo}`
+      const text = f.error !== null ? shorten(`⚠ ${f.error}`, Math.max(4, left)) : `${shorten(f.path, Math.max(4, left - Array.from(suffix).length))}${suffix}`
+      const pad = Math.max(FOOTER_GAP, W - 2 - Array.from(text).length - FOOTER_KEYS_WIDTH)
+      lines.push(
+        <Box key="footer" flexDirection="row">
+          {f.error !== null ? <Text color="warning" wrap={T}>  {text}</Text> : <Text dimColor wrap={T}>  {text}</Text>}
+          <Text wrap={T}>{' '.repeat(pad)}</Text>
+          {hotkeys}
+        </Box>,
+      )
+    }
   }
 
   return <Box flexDirection="column">{lines}</Box>
