@@ -24,6 +24,8 @@ export type PrRow = {
   url: string
   id: string
   stepId: string | undefined
+  /** The PR/MR title; '' until the first poll fills it. */
+  title: string
 }
 
 function glyphOf(e: PrEntry): string {
@@ -55,5 +57,6 @@ export function rowOf(entry: PrEntry, _now: number): PrRow {
     url: entry.url,
     id: entry.id,
     stepId: entry.stepId,
+    title: entry.title ?? '',
   }
 }

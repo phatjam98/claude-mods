@@ -210,6 +210,7 @@ test('rowOf builds pane data; errors show ⚠ class', () => {
   expect(rowOf(e, 3000)).toEqual({
     glyph: '✗', label: '#13', repoName: 'eventhorizon', branch: 'feat/phase4.7-nab', status: 'ci failed',
     color: 'error', url: 'https://github.com/phatjam98/eventhorizon/pull/13', id: ID13, stepId: undefined,
+    title: gh.failing.title,
   })
   expect(rowOf(applyPoll(e, { ok: false, error: 'auth' }, 4000), 5000).status).toBe('⚠ auth')
   expect(repoNameOf({ path: 'ecfx/sub/ecfx-backend' })).toBe('ecfx-backend')

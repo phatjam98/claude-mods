@@ -5,11 +5,24 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement, RenderInput, RenderSurface } from 'claude-code'
 
-import type { Layout, PlanSnapshot, PlanSource, PrEntry, PrsStore, PrsView, RepoRef, StoredPlan, Tracked, WaypointUi } from '../types'
+import type { Handoff, Layout, PlanSnapshot, PlanSource, PrEntry, PrsStore, PrsView, RepoRef, StoredPlan, Tracked, WaypointUi } from '../types'
 import { drawBand, drawError, drawPane } from './pane'
+import {
+  CLEARED_RESULT,
+  HANDOFF_DESCRIPTION,
+  HANDOFF_SCHEMA,
+  HANDOFF_TOOL,
+  handoffText,
+  handoffToast,
+  NOT_NOTED,
+  noteResult,
+  parseHandoffInput,
+  sanitizeHandoff,
+  sweepDrops,
+} from './handoff'
 import type { Kit, PaneActions } from './pane'
 import { parsePlan } from './plan'
-import { planSection, SECTION_ID } from './prompt'
+import { earlierHandoffSection, HANDOFF_SECTION_ID, planSection, SECTION_ID } from './prompt'
 import {
   applyPoll,
   dropPlanRefsNotIn,
@@ -56,7 +69,7 @@ const CLI_TIMEOUT_MS = 60_000
 const REPO_TTL_MS = 60_000
 const PANE_SYNC_MS = 5_000
 const USAGE =
-  'Usage: /waypoint [close|refresh|use <path|slug>|track <ref>|untrack <ref>|reset|layout [auto|compact|wide]|status]'
+  'Usage: /waypoint [close|refresh|use <path|slug>|track <ref>|untrack <ref>|handoff [clear]|reset|layout [auto|compact|wide]|status]'
 
 const EMPTY_UI: WaypointUi = { paneOpen: false, isPlaced: false, layout: null, inPlanMode: false, lastReadAt: 0, lastError: null }
 const EMPTY_PRS: PrsView = { entries: [], lastPolledAt: null, note: '' }
@@ -66,6 +79,7 @@ const plan = atom({ plugin: 'waypoint', key: 'plan' } as const, null as PlanSnap
 const ui = atom({ plugin: 'waypoint', key: 'ui' } as const, EMPTY_UI)
 const prs = atom({ plugin: 'waypoint', key: 'prs' } as const, EMPTY_PRS)
 const prsToasted = atom({ plugin: 'waypoint', key: 'prsToasted' } as const, [] as string[])
+const handoff = atom({ plugin: 'waypoint', key: 'handoff' } as const, null as Handoff | null)
 
 type Cfg = {
   openOnStart: boolean
@@ -154,7 +168,8 @@ async function setStatus($: EngineInterface): Promise<void> {
     const t = await read($, tracked)
     const s = await read($, plan)
     const u = await read($, ui)
-    const text = statusText(t && s && samePath(s.path, t.path) ? s : null, u.inPlanMode)
+    const h = await read($, handoff)
+    const text = statusText(t && s && samePath(s.path, t.path) ? s : null, u.inPlanMode, h)
     if (text === lastStatus) return
     lastStatus = text
     $.ui.status(text)
@@ -315,6 +330,7 @@ async function listRecent($: EngineInterface): Promise<RecentPlan[]> {
 async function resetTracking($: EngineInterface): Promise<void> {
   const t = await read($, tracked)
   const cwd = t?.cwd ?? (await $.session.cwd())
+  await handoffForget($)
   await update($, tracked, () => null)
   await update($, plan, () => null)
   await setUi($, { lastError: null })
@@ -339,8 +355,9 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
   await $.command.register({
     name: 'waypoint',
     description: 'Plan progress pane',
-    argumentHint: '[close|refresh|use <path>|track <ref>|untrack <ref>|reset|layout [auto|compact|wide]|status]',
+    argumentHint: '[close|refresh|use <path>|track <ref>|untrack <ref>|handoff [clear]|reset|layout [auto|compact|wide]|status]',
   })
+  await registerHandoffTool($)
   try {
     const l = await $.store.get(LAYOUT_KEY)
     if (l === 'auto' || l === 'compact' || l === 'wide') await setUi($, { layout: l })
@@ -348,6 +365,7 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
     // default layout
   }
   await prsSweep($)
+  await handoffSweep($)
   // Resume only on a fresh start: after a hot reload the atoms still hold what was tracked.
   let resumed = false
   if (!(await read($, tracked))) {
@@ -373,6 +391,7 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
   } else {
     await prsPublish($)
   }
+  await handoffPublish($)
   planTimer?.cancel()
   prTimer?.cancel()
   kickTimer?.cancel()
@@ -441,11 +460,19 @@ async function onTurnComplete($: EngineInterface): Promise<void> {
   if (await read($, tracked)) await refresh($, 'event')
 }
 
-async function composeSection($: EngineInterface): Promise<{ id: string; text: string; scope: 'session' } | null> {
+type Section = { id: string; text: string; scope: 'session' }
+
+async function composeSections($: EngineInterface): Promise<Section[]> {
+  const out: Section[] = []
   const t = await read($, tracked)
   const u = await read($, ui)
-  if (!t && !u.inPlanMode) return null
-  return { id: SECTION_ID, text: planSection(t?.path ?? '', u.inPlanMode), scope: 'session' }
+  if (t || u.inPlanMode) out.push({ id: SECTION_ID, text: planSection(t?.path ?? '', u.inPlanMode), scope: 'session' })
+  // Static until the note is cleared or replaced, so it busts the prompt cache at most once.
+  const h = await read($, handoff)
+  if (h !== null && h.sessionId !== (await $.session.id())) {
+    out.push({ id: HANDOFF_SECTION_ID, text: earlierHandoffSection(h.summary), scope: 'session' })
+  }
+  return out
 }
 
 async function summary($: EngineInterface): Promise<string> {
@@ -500,6 +527,14 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
         return await prsTrackCommand($, arg)
       case 'untrack':
         return await prsUntrackCommand($, arg)
+      case 'handoff':
+        if (arg === '') return handoffText(await read($, handoff))
+        if (arg === 'clear') {
+          const had = (await read($, handoff)) !== null
+          await handoffWrite($, null)
+          return had ? 'Handoff note cleared.' : 'No handoff note.'
+        }
+        return 'Usage: /waypoint handoff [clear]'
       case 'reset':
         await resetTracking($)
         return 'Waypoint reset: no plan tracked.'
@@ -620,6 +655,7 @@ async function prsSetPlanPath($: EngineInterface, path: string | null): Promise<
   } catch {
     // PR wiring never breaks tracking
   }
+  await handoffSetPlanPath($, path)
 }
 
 /** Debounced first poll shortly after a discovery. */
@@ -800,6 +836,141 @@ async function prsDrop($: EngineInterface, id: string): Promise<void> {
   await prsPublish($, { key, store: { ...store, entries } })
 }
 
+// --- handoff -------------------------------------------------------------------
+
+// Stored per plan like the PR store: `waypoint:handoff:plan/<abs path>` while a
+// plan is tracked, else `waypoint:handoff:session/<id>`, folded into the plan's
+// key when the plan path becomes known.
+const HANDOFF_PREFIX = 'waypoint:handoff:'
+const planHandoffKey = (path: string): string => `${HANDOFF_PREFIX}plan/${path}`
+const sessionHandoffKey = (id: string): string => `${HANDOFF_PREFIX}session/${id}`
+
+async function handoffKey($: EngineInterface): Promise<string> {
+  const t = await read($, tracked)
+  return t ? planHandoffKey(t.path) : sessionHandoffKey(await $.session.id())
+}
+
+async function handoffLoad($: EngineInterface, key: string): Promise<Handoff | null> {
+  try {
+    return sanitizeHandoff(await $.store.get(key))
+  } catch {
+    return null
+  }
+}
+
+async function setHandoff($: EngineInterface, h: Handoff | null): Promise<void> {
+  const prev = await read($, handoff)
+  if (prev === h || (prev === null && h === null)) return
+  await update($, handoff, () => h)
+  await setStatus($)
+}
+
+/** Publish the current key's note into the atom. Never throws. */
+async function handoffPublish($: EngineInterface): Promise<void> {
+  try {
+    await setHandoff($, await handoffLoad($, await handoffKey($)))
+  } catch {
+    // the note is best effort
+  }
+}
+
+/** Set (or, with null, clear) the note: atom first, then the store. */
+async function handoffWrite($: EngineInterface, h: Handoff | null): Promise<void> {
+  await setHandoff($, h)
+  try {
+    const key = await handoffKey($)
+    if (h) await $.store.set(key, h)
+    else await $.store.delete(key)
+  } catch {
+    // the atom still holds it for this session
+  }
+}
+
+/** The plan path became known (or was cleared): move the session's note into the plan's key, then publish. */
+async function handoffSetPlanPath($: EngineInterface, path: string | null): Promise<void> {
+  try {
+    if (path) {
+      const sKey = sessionHandoffKey(await $.session.id())
+      const sess = await handoffLoad($, sKey)
+      if (sess) {
+        const pKey = planHandoffKey(path)
+        const cur = await handoffLoad($, pKey)
+        if (!cur || cur.at <= sess.at) await $.store.set(pKey, sess)
+        await $.store.delete(sKey)
+      }
+    }
+  } catch {
+    // migration is best effort
+  }
+  await handoffPublish($)
+}
+
+/** `/waypoint reset`: drop the note under the plan's key and the session's. */
+async function handoffForget($: EngineInterface): Promise<void> {
+  try {
+    const t = await read($, tracked)
+    if (t) await $.store.delete(planHandoffKey(t.path))
+    await $.store.delete(sessionHandoffKey(await $.session.id()))
+  } catch {
+    // nothing stored
+  }
+  await setHandoff($, null)
+}
+
+/** Start of session: drop unreadable and expired notes, and other sessions' idle session-key notes (`sweepDrops`). */
+async function handoffSweep($: EngineInterface): Promise<void> {
+  try {
+    const now = await $.clock.now()
+    const own = sessionHandoffKey(await $.session.id())
+    for (const k of await $.store.keys()) {
+      if (!k.startsWith(HANDOFF_PREFIX)) continue
+      const h = await handoffLoad($, k)
+      if (sweepDrops(h, now, { isSession: k.startsWith(sessionHandoffKey('')), isOwn: k === own })) await $.store.delete(k)
+    }
+  } catch {
+    // housekeeping is best effort
+  }
+}
+
+async function registerHandoffTool($: EngineInterface): Promise<void> {
+  try {
+    await $.tool.register({ name: HANDOFF_TOOL, description: HANDOFF_DESCRIPTION, inputSchema: HANDOFF_SCHEMA, isDeferred: false })
+  } catch (err) {
+    try {
+      $.ui.log(`waypoint: could not register the handoff tool: ${String((err as Error)?.message ?? err)}`, { to: 'debug' })
+    } catch {
+      // logging is optional
+    }
+  }
+}
+
+/** Serves `mcp__waypoint__handoff`: `{ result }` once applied, `{ deny }` (an error result to the model) for a bad input. */
+async function onHandoffCall($: EngineInterface, raw: unknown): Promise<{ result: string } | { deny: string }> {
+  const r = parseHandoffInput(raw)
+  if (!r.ok) return { deny: r.error }
+  const parsed = r.input
+  if (parsed.op === 'clear') {
+    await handoffWrite($, null)
+    return { result: CLEARED_RESULT }
+  }
+  const h: Handoff = { summary: parsed.summary, items: parsed.items, at: await $.clock.now(), sessionId: await $.session.id() }
+  await handoffWrite($, h)
+  const text = handoffToast(h)
+  try {
+    $.ui.toast(text, { timeoutMs: 6000 })
+  } catch {
+    // cosmetic
+  }
+  if (cfg.notify) {
+    try {
+      await $.ui.notify(text, { title: 'waypoint' })
+    } catch {
+      // notifications are optional
+    }
+  }
+  return { result: noteResult(parsed) }
+}
+
 // --- pane, band ----------------------------------------------------------------
 
 async function pickPlan($: EngineInterface, path: string): Promise<void> {
@@ -848,6 +1019,7 @@ async function paneBody($: EngineInterface, e: RenderInput<'Pane'>, el: Kit): Pr
   const s = await read($, plan)
   const u = await read($, ui)
   const p = await read($, prs)
+  const h = await read($, handoff)
   const now = await $.clock.now()
   const model = buildPaneModel({
     snap: t && s && samePath(s.path, t.path) ? s : null,
@@ -862,6 +1034,9 @@ async function paneBody($: EngineInterface, e: RenderInput<'Pane'>, el: Kit): Pr
     opts: { layout: cfg.layout },
     recent: recentPlans,
     planDir: cfg.planDir,
+    handoff: h,
+    sessionId: await $.session.id(),
+    home: await homeDir($),
   })
   return drawPane(el, e, model, makeActions($))
 }
@@ -869,12 +1044,19 @@ async function paneBody($: EngineInterface, e: RenderInput<'Pane'>, el: Kit): Pr
 async function bandHook($: EngineInterface, e: RenderInput<'AbovePrompt'>): Promise<RenderElement | null> {
   const t = await read($, tracked)
   const u = await read($, ui)
-  if (bandQuiet({ hasSurvey: e.props.hasSurvey, bandOn: cfg.band, tracked: t !== null && !t.missing, inPlanMode: u.inPlanMode, isPlaced: u.paneOpen && u.isPlaced })) {
-    return null
-  }
+  const h = await read($, handoff)
+  const quiet = bandQuiet({
+    hasSurvey: e.props.hasSurvey,
+    bandOn: cfg.band,
+    tracked: t !== null && !t.missing,
+    inPlanMode: u.inPlanMode,
+    isPlaced: u.paneOpen && u.isPlaced,
+    handoff: h !== null,
+  })
+  if (quiet) return null
   const s = await read($, plan)
   const p = await read($, prs)
-  const model = buildBandModel(t && s && samePath(s.path, t.path) ? s : null, p)
+  const model = buildBandModel(t && s && samePath(s.path, t.path) ? s : null, p, h)
   return drawBand($.ui.resolve(e), e, model, makeActions($))
 }
 
@@ -944,6 +1126,14 @@ export const register: Register = (on, options) => {
     return ran
   }).catch(($, e, next) => next(e))
 
+  on('tool.call', { tool: /^mcp__waypoint__handoff$/ }, async ($, e) => {
+    try {
+      return await onHandoffCall($, e)
+    } catch (err) {
+      return { deny: `${NOT_NOTED}${String((err as Error)?.message ?? err)}` }
+    }
+  })
+
   on('turn.complete', async ($, e, next) => {
     try {
       if (!e.agentId) await onTurnComplete($)
@@ -956,8 +1146,8 @@ export const register: Register = (on, options) => {
   on('prompt.compose', async ($, e, next) => {
     const r = await next(e)
     try {
-      const section = await composeSection($)
-      return section ? { ...r, sections: [...r.sections, section] } : r
+      const sections = await composeSections($)
+      return sections.length > 0 ? { ...r, sections: [...r.sections, ...sections] } : r
     } catch {
       return r
     }

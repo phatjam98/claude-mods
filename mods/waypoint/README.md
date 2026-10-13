@@ -28,19 +28,59 @@ claude --plugin-dir mods/waypoint
 
 ## What you see
 
+Docked and wide (60 columns or more):
+
+```
+⚑ claude-mods repo + waypoint, a plan-progress pane mod                  WP5 · 5 of 6 · 83%
+████████████████████████████████████████████████████████████████████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+
+  ✓  WP0  Repo bootstrap and dev loop
+  ✓  WP1  Mod skeleton, contract, plan parser
+  ✓  WP2  State, events, discovery, commands, prompt section
+  ✓  WP3  Pane, band, status line
+  ✓  WP4  PR/MR "needs attention" subsystem
+  ▶  WP5  Docs, CI, PR, release                                                      2/4
+          ✓ docs   ✓ CI   · merge   · tag
+
+  Pull requests · 1 open · none need you · polled 3s ago
+  ○  #1  feat(waypoint): plan pane with PR/MR attention, marketplace, CI   WP5    draft   copy · untrack
+
+  Waiting on you · 12m ago
+  PR #1 is verified: 150 tests, strict validation, CI green on fba106a. Next: look at
+  the pane, then mark #1 ready and merge. After the merge I tag waypoint--v0.1.0.
+  !  decision  Mark PR #1 ready and merge?                                            #1
+  ·  action    Say how the pane looks on screen
+
+  ~/.claude/plans/we-are-going-to-purring-origami.md · changed 12h ago     r refresh · p path · c close
+```
+
+Inline, or narrower than 60 columns (8 rows at most, no footer):
+
+```
+⚑ ship the widget                    3/9 33%
+████████████████▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░
+✓ 3 done · WP0 WP1 WP2
+▶ WP3 Draw the pane                      1/2
+· WP4 Step number 4
+· WP5 Step number 5                  +3 more
+! waiting on you · Mark PR #13 ready a… (+1)
+✗ 1 PR needs you · #13 ci failed · polled 0s…
+```
+
 The pane shows:
 
-- the plan title and a progress bar with `done of total` and a percentage;
-- the step list, one glyph per step: `✓` done, `▶` in progress, `·` pending, `!` blocked on you, `–` skipped;
-- in the wide layout, the current step's child checkboxes;
-- a "PRs needing attention" section while any tracked PR/MR is open: those needing action (failing CI, requested changes, conflicts, ready to merge) first, then, in the wide layout, the other open ones under "other PRs" (5 rows at most), with `copy` and `untrack` buttons per row. Its header says when PRs were last polled, and a gh/glab error (not logged in, rate-limited, not installed) shows as a note under it. Merged and closed PRs are not listed;
-- in the wide layout, a footer with the plan path, when it was last read, and `refresh` / `path` / `close` buttons (the compact layout has no footer or buttons).
+- the plan title, and on the right the current step, `done of total` and the percentage (`3/9 33%` in compact);
+- a bar the full width of the pane in three spans: finished steps `█` (green), the current step's own share `▓` (plan-mode colour, or warning when it is blocked) and what remains `░`. It shows how far along the plan is and where the session is in it;
+- the step list, one glyph per step: `✓` done, `▶` in progress (bold), `·` pending (dim), `!` blocked on you (warning), `–` skipped (struck through); the current step shows its child-checkbox progress (`2/4`) and, in the wide layout, its checkboxes on the line below. When the steps do not fit, leading finished steps fold into one `✓ n done` row and a `+n more` row ends the list; the current step is always shown;
+- a "Pull requests" section while any tracked PR/MR is open: the header counts those that need you (failing CI, requested changes, conflicts, ready to merge; in warning colour when any do), the other open ones, and when PRs were last polled. Rows list those needing you first, then the others dimmed (5 rows at most), each with its link, title, step, status and `copy · untrack` buttons. A gh/glab error (not logged in, rate-limited, not installed) shows as a note under the header. Merged and closed PRs are not listed. Compact draws one line for the PR most in need;
+- a "Waiting on you" section while the model has left a handoff note (see below): when it was left, its summary (4 lines at most) and one line per item, `!` for those blocking the plan, with a link when the item names a tracked PR/MR or a URL. Its header says `from an earlier session` when the note was left by another session. Compact draws one line, `! waiting on you · <first item>`, and so does every other pane state (no plan tracked, planning, file missing, no steps), on its first row. This section and the PR section keep their rows before the step list does; when rows run short they give up the blank lines between sections, then the `+n more` item row, then fold to one line each (the handoff first, then the PRs);
+- in the wide layout, a footer with the plan path (`~` for your home folder), when the plan file last changed, and `refresh` / `path` / `close` buttons.
 
 With no plan tracked, `/waypoint` lists up to 5 recent plans from `planDir`, newest first, each with a hotkey `1`–`5` to track it.
 
-When the pane is not placed (narrow terminal, or closed), a one-line band above the prompt carries the summary (for example the current step, steps done, PRs needing you) with an `open` button.
+When the pane is not placed (narrow terminal, or closed), a one-line band above the prompt carries the summary (for example the current step, steps done, PRs needing you) with an `open` button. While a handoff note is up it reads `⚑ waiting on you (2) · WP5 of 6 · 5 done`, in warning colour, and with no plan tracked it still shows as `⚑ waiting on you (2)`.
 
-The status line carries a short segment: `⚑ 3/9 WP2`, with `!` after the step when blocked, `✓` when complete.
+The status line carries a short segment: `⚑ 3/9 WP2`, with `!` after the step when blocked, `✓` when complete, and ` · needs you` while a handoff note is up (`⚑ 5/6 WP5 · needs you`; `⚑ needs you` with no plan tracked, `⚑ no steps · needs you` for a plan with no steps).
 
 ## The plan convention
 
@@ -60,6 +100,12 @@ While a plan is tracked, the mod adds a short section to the system prompt askin
 
 PR/MR links are read from a step in two ways: any full PR/MR URL anywhere in the step, and short refs (`#13`, `!6677`, `group/project!6677`, against this repo) only on a `- PR: <url or #n>` / `- MR: …` line under the step, or as a markdown link target (`[fix](#13)`). A bare `#123` in prose is ignored.
 
+## Handoff: when the session waits on you
+
+When the model stops because only you can move the plan (a decision, a merge, a credential, an answer), the system-prompt section asks it to call the tool `mcp__waypoint__handoff` first, with a 2–4 sentence summary of where things stand and one item per thing you must do, decide or answer (`decision`, `action` or `answer`; `blocking` when the plan cannot move without it; an optional PR/MR `ref`). The note shows in the pane as "Waiting on you", in the band and on the status line, and raises a toast (and a native notification with `notify` on). When work resumes the model calls the tool with `clear: true`, or replaces the note. An input with neither a summary nor an item comes back to the model as an error. `/waypoint handoff` prints it and `/waypoint handoff clear` clears it yourself.
+
+The note is kept per plan: it comes back when a later session resumes the same plan, as a recap marked `from an earlier session`, and is dropped after 30 days untouched. While such a note is showing, a second short system-prompt section tells the model it is there (with the summary's first 120 characters), so it can clear or replace it once you have acted.
+
 ## Commands
 
 | Command | Does |
@@ -70,14 +116,16 @@ PR/MR links are read from a step in two ways: any full PR/MR URL anywhere in the
 | `/waypoint use <path\|slug>` | Track a plan by path, or by slug in `planDir` |
 | `/waypoint track <ref>` | Track a PR/MR: a URL, `#n` / `!n` (against this repo), `group/project!n`, or `host/path#n` / `host/path!n` |
 | `/waypoint untrack <ref>` | Stop tracking a PR/MR: any form `track` takes, its label, or its full id (`github.com/o/r#5`) |
-| `/waypoint reset` | Forget the tracked plan |
+| `/waypoint handoff` | Print the model's current "waiting on you" note |
+| `/waypoint handoff clear` | Clear that note |
+| `/waypoint reset` | Forget the tracked plan and its handoff note |
 | `/waypoint layout auto\|compact\|wide` | Choose the pane layout; this choice wins over the `layout` option |
 | `/waypoint layout` | Forget that choice, so the `layout` option applies again |
 | `/waypoint status` | One-line summary |
 
 ## Keys
 
-The pane hotkeys `r` (refresh), `p` (copy path) and `c` (close) exist only in the wide layout, and `1`–`5` (pick a recent plan) only when no plan is tracked. All work only while the pane is focused (ctrl+x, then tab). The pane opens automatically only at 144 columns or wider; `/waypoint` opens it at any width.
+The pane hotkeys `r` (refresh), `p` (copy path) and `c` (close) sit in the footer of the wide layout only (the per-PR `copy` and `untrack` buttons have no hotkey), and `1`–`5` (pick a recent plan) exist only when no plan is tracked. All work only while the pane is focused (ctrl+x, then tab). The pane opens automatically only at 144 columns or wider; `/waypoint` opens it at any width.
 
 ## Configure
 
@@ -93,7 +141,7 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 | `planPollSeconds` | `5` | How often the plan file is stat-ed for outside edits; 0 disables |
 | `resumeDays` | `14` | A plan last touched within this many days comes back in a new session in the same directory |
 | `pollSeconds` | `120` | How often tracked PRs/MRs are polled with gh/glab; minimum 30 |
-| `notify` | `false` | Also raise a system notification when a PR/MR starts needing attention (toasts always show) |
+| `notify` | `false` | Also raise a system notification when a PR/MR starts needing attention or the model leaves a handoff note (toasts always show) |
 
 ## What it can reach
 
@@ -106,10 +154,11 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 - **Observes** the plan-mode attachments (`plan_mode`, `plan_mode_reentry`, `plan_mode_exit`; main session only), for the plan file path and whether plan mode is on.
 - **Observes** turn completion (main session only), to re-check the plan file's modification time.
 - **Runs** read-only `gh pr view --json` and `glab mr view -F json`, using your existing logins: every `pollSeconds`, 750 ms after a new PR/MR is discovered, and on `/waypoint refresh`.
-- **Adds** a short section to the system prompt while a plan is tracked or in plan mode. It asks the model to keep the step markers current: "A step is a heading whose text starts with a marker: `### [ ] WP1 — Title` pending, `[~]` in progress, `[x]` done, `[!]` blocked on the user", to edit a heading to `[~]` when starting and `[x]` when finished, and to add `- PR: <url>` under a step when it opens a PR.
+- **Registers** one tool, `mcp__waypoint__handoff`, which the model calls to leave (or clear) the "waiting on you" note. The tool only records what the model passes it (a summary, up to 10 items, control characters stripped, at most 1200 + 10 × (200 + 500) characters: a 200-character title and a 500-character ref per item); it runs nothing and reads nothing.
+- **Adds** a short section to the system prompt while a plan is tracked or in plan mode. It asks the model to keep the step markers current: "A step is a heading whose text starts with a marker: `### [ ] WP1 — Title` pending, `[~]` in progress, `[x]` done, `[!]` blocked on the user", to edit a heading to `[~]` when starting and `[x]` when finished, to add `- PR: <url>` under a step when it opens a PR, and to call `mcp__waypoint__handoff` when it stops waiting on you (and with `clear: true` when it resumes). While a handoff note from an earlier session is showing, a second section (`waypoint:handoff`) quotes the first 120 characters of its summary and asks the model to clear or replace it once you have acted.
 - **Writes** to the clipboard only when you press `p` (plan path) or `copy` (PR URL).
-- **Notifies** with native system notifications only when the `notify` option is on; toasts show otherwise.
-- **Stores**, in the plugin's own store: `layout` (your `/waypoint layout` choice); `last:<cwd>` = `{ path, title, at, percent, sessionId }` (to resume the plan in that directory); `waypoint:prs:plan/<plan path>` and `waypoint:prs:session/<session id>` = the tracked PR/MR entries (id, URL, title, branch, state, CI/review/merge status, when seen and polled). Closed PRs older than 7 days, and PRs/MRs the CLI reported not found three polls running, are pruned on every write and at session start; also at session start other sessions' session keys with no activity in the last day, and plan keys with no open PR and nothing newer than 7 days, are deleted.
+- **Notifies** with native system notifications only when the `notify` option is on (a PR/MR starting to need attention, a new handoff note); toasts show otherwise.
+- **Stores**, in the plugin's own store: `layout` (your `/waypoint layout` choice); `last:<cwd>` = `{ path, title, at, percent, sessionId }` (to resume the plan in that directory); `waypoint:prs:plan/<plan path>` and `waypoint:prs:session/<session id>` = the tracked PR/MR entries (id, URL, title, branch, state, CI/review/merge status, when seen and polled). Closed PRs older than 7 days, and PRs/MRs the CLI reported not found three polls running, are pruned on every write and at session start; also at session start other sessions' session keys with no activity in the last day, and plan keys with no open PR and nothing newer than 7 days, are deleted. `waypoint:handoff:plan/<plan path>` and `waypoint:handoff:session/<session id>` = the handoff note (`{ summary, items, at, sessionId }`), the session key folded into the plan key when a plan becomes tracked; notes older than 30 days, and other sessions' session-key notes older than a day, are deleted at session start (never the current session's), and `/waypoint reset` deletes the current one.
 - **Sends** nothing itself: it makes no network requests of its own (gh/glab do, with your logins).
 - **Never** writes to repositories or to the plan file.
 

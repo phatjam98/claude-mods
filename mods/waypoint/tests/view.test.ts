@@ -9,12 +9,16 @@ import {
   fitSteps,
   fmtAgo,
   headerLine,
+  homePath,
   MAX_PR_ROWS,
+  paneRows,
+  resolveRef,
+  wrapSummary,
   shorten,
   statusText,
 } from '../hooks/view'
 import type { PaneInput, PrRow, Row } from '../hooks/view'
-import type { PlanSnapshot, PrEntry, PrsView, Step, StepStatus, SubItem, Tracked, WaypointUi } from '../types'
+import type { Handoff, PlanSnapshot, PrEntry, PrsView, Step, StepStatus, SubItem, Tracked, WaypointUi } from '../types'
 
 const NOW = 1_800_000_000_000
 
@@ -91,12 +95,60 @@ function input(over: Partial<PaneInput> = {}): PaneInput {
 
 const kinds = (rows: Row[]) => rows.map(r => r.kind)
 
-test('bar(33, 24): 8 on, 16 off; clamps out-of-range input', () => {
-  const b = bar(33, 24)
-  expect(b.on).toBe('█'.repeat(8))
-  expect(b.off).toBe('░'.repeat(16))
-  expect(bar(150, 10).on.length).toBe(10)
-  expect(bar(-5, 10).off.length).toBe(10)
+const barLen = (b: ReturnType<typeof bar>) => b.done.length + b.current.length + b.rest.length
+
+test('bar: three spans, exact width, done absorbs rounding', () => {
+  const b = bar(5, 6, 'active', 92)
+  expect(b).toEqual({ done: '█'.repeat(77), current: '▓'.repeat(15), currentColor: 'planMode', rest: '' })
+  const mid = bar(2, 9, 'active', 90)
+  expect(mid.current.length).toBe(10)
+  expect(mid.rest.length).toBe(60)
+  expect(mid.done.length).toBe(20)
+  for (const w of [40, 41, 77, 92, 120]) for (const [f, t] of [[0, 9], [3, 9], [8, 9], [9, 9], [1, 7]] as const) {
+    expect(barLen(bar(f, t, f < t ? 'active' : null, w))).toBe(w)
+  }
+})
+
+test('bar: blocked current is a warning; nothing done leaves no done span; complete is all done', () => {
+  expect(bar(3, 5, 'blocked', 50).currentColor).toBe('warning')
+  const fresh = bar(0, 6, 'active', 44)
+  expect(fresh.done).toBe('')
+  expect(fresh.current.length).toBe(7)
+  expect(barLen(fresh)).toBe(44)
+  expect(bar(6, 6, null, 30)).toEqual({ done: '█'.repeat(30), current: '', currentColor: 'planMode', rest: '' })
+  expect(bar(0, 0, null, 10).rest).toBe('░'.repeat(10))
+  expect(bar(0, 200, 'active', 40).current.length).toBe(1)
+})
+
+test('wrapSummary: wraps on words to the width, at most 4 lines, the last cut with …', () => {
+  expect(wrapSummary('one two three', 20)).toEqual(['one two three'])
+  expect(wrapSummary('aaa bbb ccc', 7)).toEqual(['aaa bbb', 'ccc'])
+  const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ')
+  const lines = wrapSummary(long, 30)
+  expect(lines.length).toBe(4)
+  expect(lines.every(l => Array.from(l).length <= 30)).toBe(true)
+  expect(lines[3]!.endsWith('…')).toBe(true)
+  expect(wrapSummary('x'.repeat(25), 10)).toEqual(['x'.repeat(10), 'x'.repeat(10), 'x'.repeat(5)])
+  expect(wrapSummary('  spaced\n\nout   text ', 40)).toEqual(['spaced out text'])
+  expect(wrapSummary('', 40)).toEqual([])
+})
+
+test('homePath: $HOME → ~, else a /Users/<x>/ or /home/<x>/ prefix', () => {
+  expect(homePath('/Users/me/.claude/plans/a.md', '/Users/me')).toBe('~/.claude/plans/a.md')
+  expect(homePath('/Users/me/.claude/plans/a.md', '/Users/me/')).toBe('~/.claude/plans/a.md')
+  expect(homePath('/srv/plans/a.md', '/Users/me')).toBe('/srv/plans/a.md')
+  expect(homePath('/Users/meow/a.md', '/Users/me')).toBe('/Users/meow/a.md')
+  expect(homePath('/Users/me/a.md')).toBe('~/a.md')
+  expect(homePath('/home/t/.claude/plans/a.md')).toBe('~/.claude/plans/a.md')
+  expect(homePath('/srv/a.md')).toBe('/srv/a.md')
+})
+
+test('resolveRef: tracked PR label/id/url → its link; other URLs link; plain refs do not', () => {
+  const rows: PrRow[] = [{ glyph: '○', label: '#1', repoName: 'r', branch: 'b', status: 'draft', color: 'subtle', url: 'https://github.com/a/r/pull/1', id: 'github.com/a/r#1' }]
+  expect(resolveRef('#1', rows)).toEqual({ text: '#1', href: 'https://github.com/a/r/pull/1' })
+  expect(resolveRef('github.com/a/r#1', rows)).toEqual({ text: '#1', href: 'https://github.com/a/r/pull/1' })
+  expect(resolveRef('https://gitlab.com/x/y/-/merge_requests/6677', rows)).toEqual({ text: '!6677', href: 'https://gitlab.com/x/y/-/merge_requests/6677' })
+  expect(resolveRef('#9', rows)).toEqual({ text: '#9', href: null })
 })
 
 test('bandText: normal, with PRs, blocked, complete, planning, zero steps', () => {
@@ -116,7 +168,7 @@ test('buildBandModel colours a blocked plan as a warning', () => {
 })
 
 test('bandQuiet: survey, option off, placed pane, nothing tracked', () => {
-  const base = { hasSurvey: false, bandOn: true, tracked: true, inPlanMode: false, isPlaced: false }
+  const base = { hasSurvey: false, bandOn: true, tracked: true, inPlanMode: false, isPlaced: false, handoff: false }
   expect(bandQuiet(base)).toBe(false)
   expect(bandQuiet({ ...base, hasSurvey: true })).toBe(true)
   expect(bandQuiet({ ...base, bandOn: false })).toBe(true)
@@ -125,12 +177,45 @@ test('bandQuiet: survey, option off, placed pane, nothing tracked', () => {
   expect(bandQuiet({ ...base, tracked: false, inPlanMode: true })).toBe(false)
 })
 
+test('bandQuiet + band: a handoff with nothing tracked shows the band; survey, option off and a placed pane still quiet it', () => {
+  const none = { hasSurvey: false, bandOn: true, tracked: false, inPlanMode: false, isPlaced: false, handoff: true }
+  expect(bandQuiet(none)).toBe(false)
+  expect(bandQuiet({ ...none, hasSurvey: true })).toBe(true)
+  expect(bandQuiet({ ...none, bandOn: false })).toBe(true)
+  expect(bandQuiet({ ...none, isPlaced: true })).toBe(true)
+  const ho: Handoff = { summary: 's', items: [{ kind: 'decision', title: 'a', blocking: true }, { kind: 'action', title: 'b', blocking: false }], at: NOW, sessionId: 'S' }
+  expect(buildBandModel(null, NO_PRS, ho)).toEqual({ text: '⚑ waiting on you (2)', color: 'warning' })
+})
+
+test('handoffBandText counts skipped steps as finished in every branch', () => {
+  const ho: Handoff = { summary: 's', items: [], at: NOW, sessionId: 'S' }
+  expect(buildBandModel(snap(['done', 'skipped', 'active', 'pending']), NO_PRS, ho).text).toBe('⚑ waiting on you (0) · WP2 of 4 · 2 done')
+  expect(buildBandModel(snap(['done', 'skipped']), NO_PRS, ho).text).toBe('⚑ waiting on you (0) · plan complete · 2/2')
+})
+
+test('handoff: band says waiting on you in warning; status says needs you; blocked keeps !', () => {
+  const ho: Handoff = { summary: 's', items: [{ kind: 'decision', title: 'a', blocking: true }, { kind: 'action', title: 'b', blocking: false }], at: NOW, sessionId: 'S' }
+  expect(buildBandModel(snap(NINE), NO_PRS, ho)).toEqual({ text: '⚑ waiting on you (2) · WP2 of 9 · 2 done', color: 'warning' })
+  expect(buildBandModel(snap(NINE), NO_PRS, null).text).toBe('⚑ WP2 of 9 · 2 done')
+  expect(statusText(snap(NINE), false, ho)).toBe('⚑ 2/9 WP2 · needs you')
+  expect(statusText(snap(['done', 'done', 'done', 'blocked']), false, ho)).toBe('⚑ 3/4 WP3!')
+  expect(statusText(snap(['done', 'done']), false, ho)).toBe('⚑ 2/2 · needs you')
+})
+
 test('statusText: normal, blocked, done, planning, nothing', () => {
   expect(statusText(snap(NINE), false)).toBe('⚑ 2/9 WP2')
   expect(statusText(snap(['done', 'done', 'done', 'blocked']), false)).toBe('⚑ 3/4 WP3!')
   expect(statusText(snap(['done', 'done']), false)).toBe('⚑ 2/2 ✓')
   expect(statusText(null, true)).toBe('⚑ planning')
   expect(statusText(null, false)).toBe(undefined)
+})
+
+test('statusText with a handoff: nothing tracked → needs you; zero steps → no steps · needs you; planning unchanged', () => {
+  const ho: Handoff = { summary: 's', items: [], at: NOW, sessionId: 'S' }
+  expect(statusText(null, false, ho)).toBe('⚑ needs you')
+  expect(statusText(null, true, ho)).toBe('⚑ planning')
+  expect(statusText(snap([]), false, ho)).toBe('⚑ no steps · needs you')
+  expect(statusText(snap([]), false, null)).toBe('⚑ no steps')
 })
 
 test('fitSteps(9, current=2, rows=5, wide): keeps current, collapses done, ends +n more', () => {
@@ -188,7 +273,9 @@ test('chooseLayout thresholds', () => {
 test('headerLine: narrow vs wide progress, title cut to fit', () => {
   const s = snap(NINE)
   expect(headerLine(s, 44).right).toBe('2/9 22%')
-  expect(headerLine(s, 90).right).toBe('2 of 9 · 22%')
+  expect(headerLine(s, 90).right).toBe('WP2 · 2 of 9 · 22%')
+  expect(headerLine(s, 90).pct).toBe('22%')
+  expect(headerLine(snap(['done', 'skipped']), 90).right).toBe('done · 2 of 2 · 100%')
   const h = headerLine({ ...s, displayTitle: 'x'.repeat(100) }, 44)
   expect(Array.from(h.title).length + h.right.length + 2 <= 44).toBe(true)
   expect(h.title.endsWith('…')).toBe(true)
@@ -199,11 +286,15 @@ test('buildPaneModel plan (wide): header, bar, footer, step rows within budget',
   expect(m.kind).toBe('plan')
   if (m.kind !== 'plan') return
   expect(m.layout).toBe('wide')
-  expect(m.header.right).toBe('2 of 9 · 22%')
-  expect(m.bar.on.length + m.bar.off.length).toBe(90)
+  expect(m.header.right).toBe('WP2 · 2 of 9 · 22%')
+  expect(barLen(m.bar)).toBe(90)
   expect(m.rows.length).toBe(9)
+  expect(m.shortWidth).toBe(3)
   expect(m.prSection).toBe(null)
-  expect(m.footer).toEqual({ path: TRACKED.path, readAgo: '12s ago', error: null })
+  expect(m.handoff).toBe(null)
+  expect(m.footer).toEqual({ path: '~/.claude/plans/noble-tulip.md', changedAgo: '1m ago', error: null })
+  const homed = buildPaneModel(input({ home: '/Users/other' }))
+  expect(homed.kind === 'plan' && homed.footer.path).toBe(TRACKED.path)
 })
 
 test('buildPaneModel plan (inline compact): capped at 8 rows, one PR line', () => {
@@ -231,10 +322,13 @@ test('buildPaneModel PR section (wide): attention first, other open PRs after, m
   if (m.kind !== 'plan') throw new Error(m.kind)
   expect(m.prSection).toEqual({
     count: 2,
+    open: 3,
+    head: { before: ' · ', need: '2 need you', hot: true, after: ' · 1 other · polled 2m ago' },
     rows: [expect.objectContaining({ id: '#2' }), expect.objectContaining({ id: '#5' })],
     others: [expect.objectContaining({ id: '#1' })],
     polled: '2m ago',
     note: 'gh not logged in — run gh auth login',
+    compact: false,
   })
   const many = Array.from({ length: 8 }, (_, i) => e(`#${i + 10}`, i % 2 ? 'fix-ci' : null))
   const capped = buildPaneModel(input({ rows: 40, prs: { ...prs, entries: many }, prRows: many.map(x => row(x.id)) }))
@@ -265,12 +359,42 @@ test('buildPaneModel planning: in plan mode with nothing tracked, or tracked bef
 
 test('buildPaneModel missing keeps the path and the last counts', () => {
   const m = buildPaneModel(input({ tracked: { ...TRACKED, missing: true } }))
-  expect(m).toEqual({ kind: 'missing', path: TRACKED.path, lastCounts: snap(NINE).counts })
+  expect(m).toEqual({ kind: 'missing', path: TRACKED.path, lastCounts: snap(NINE).counts, handoffLine: null })
 })
 
 test('buildPaneModel no-steps', () => {
   const m = buildPaneModel(input({ snap: snap([], { mode: 'none' }) }))
-  expect(m).toEqual({ kind: 'no-steps', title: 'ECFX-18104 — re-baseline schema.sql', path: TRACKED.path })
+  expect(m).toEqual({ kind: 'no-steps', title: 'ECFX-18104 — re-baseline schema.sql', path: TRACKED.path, handoffLine: null })
+})
+
+test('buildPaneModel: every non-plan state carries the compact handoff line', () => {
+  const ho: Handoff = { summary: 'Line one of the summary.\nLine two.', items: [], at: NOW, sessionId: 'S' }
+  const two: Handoff = { ...ho, items: [{ kind: 'decision', title: 'Merge?', blocking: true }, { kind: 'action', title: 'Look', blocking: false }] }
+  const states: PaneInput[] = [
+    input({ tracked: null, snap: null }),
+    input({ tracked: null, snap: null, ui: { ...UI, inPlanMode: true } }),
+    input({ tracked: { ...TRACKED, missing: true } }),
+    input({ snap: snap([], { mode: 'none' }) }),
+  ]
+  for (const st of states) {
+    const m = buildPaneModel({ ...st, handoff: two })
+    if (m.kind === 'plan') throw new Error('plan')
+    expect(m.handoffLine).toBe('! waiting on you · Merge? (+1)')
+    const bare = buildPaneModel({ ...st, handoff: ho })
+    expect(bare.kind !== 'plan' && bare.handoffLine).toBe('! waiting on you · Line one of the summary. Line two.')
+    const none = buildPaneModel(st)
+    expect(none.kind !== 'plan' && none.handoffLine).toBe(null)
+  }
+})
+
+test('buildPaneModel: a handoff from another session is marked fromEarlier', () => {
+  const ho: Handoff = { summary: 's', items: [], at: NOW, sessionId: 'OLD' }
+  const other = buildPaneModel(input({ handoff: ho, sessionId: 'S1' }))
+  expect(other.kind === 'plan' && other.handoff!.fromEarlier).toBe(true)
+  const same = buildPaneModel(input({ handoff: ho, sessionId: 'OLD' }))
+  expect(same.kind === 'plan' && same.handoff!.fromEarlier).toBe(false)
+  const unknown = buildPaneModel(input({ handoff: ho }))
+  expect(unknown.kind === 'plan' && unknown.handoff!.fromEarlier).toBe(false)
 })
 
 test('shorten cuts with an ellipsis and leaves short strings alone', () => {
@@ -286,4 +410,112 @@ test('fmtAgo: seconds, minutes, hours, days; never negative', () => {
   expect(fmtAgo(NOW, NOW - 2 * 3_600_000)).toBe('2h ago')
   expect(fmtAgo(NOW, NOW - 3 * 86_400_000)).toBe('3d ago')
   expect(fmtAgo(NOW, NOW + 5000)).toBe('0s ago')
+})
+
+const HANDOFF: Handoff = {
+  summary:
+    'PR #1 is verified: 150 tests, strict validation, CI green on fba106a. Next: look at the pane, then mark #1 ready and merge. After the merge I tag waypoint--v0.1.0 and publish the marketplace entry for everyone.',
+  items: [
+    { kind: 'decision', title: 'Mark PR #1 ready and merge?', ref: '#1', blocking: true },
+    { kind: 'action', title: 'Say how the pane looks on screen', blocking: false },
+  ],
+  at: NOW - 12 * 60_000,
+  sessionId: 'S1',
+}
+
+test('buildPaneModel handoff (wide): ago, summary wrapped to width − 2 in ≤ 4 lines, items with refs', () => {
+  const e = { id: 'github.com/a/r#1', attention: null, state: 'open' } as unknown as PrEntry
+  const prRows: PrRow[] = [{ glyph: '○', label: '#1', repoName: 'r', branch: 'b', status: 'draft', color: 'subtle', url: 'https://github.com/a/r/pull/1', id: e.id, title: 'feat: x' }]
+  const m = buildPaneModel(input({ handoff: HANDOFF, prs: { entries: [e], lastPolledAt: NOW - 3000, note: '' }, prRows }))
+  if (m.kind !== 'plan') throw new Error(m.kind)
+  const h = m.handoff!
+  expect(h.ago).toBe('12m ago')
+  expect(h.summary.length <= 4 && h.summary.length >= 2).toBe(true)
+  expect(h.summary.every(l => Array.from(l).length <= 88)).toBe(true)
+  expect(h.items[0]).toEqual({ blocking: true, kind: 'decision', title: 'Mark PR #1 ready and merge?', ref: { text: '#1', href: 'https://github.com/a/r/pull/1' } })
+  expect(h.items[1]!.kind).toBe('action  ')
+  expect(h.items[1]!.ref).toBe(null)
+  expect(h.line).toBe('! waiting on you · Mark PR #1 ready and merge? (+1)')
+  expect(m.prSection!.head).toEqual({ before: ' · 1 open · ', need: 'none need you', hot: false, after: ' · polled 3s ago' })
+})
+
+test('buildPaneModel row budget: handoff and PRs keep their rows, steps shrink, current stays', () => {
+  const many: Handoff = { ...HANDOFF, items: Array.from({ length: 8 }, (_, i) => ({ kind: 'action' as const, title: `do ${i}`, blocking: false })) }
+  const m = buildPaneModel(input({ rows: 20, handoff: many }))
+  if (m.kind !== 'plan') throw new Error(m.kind)
+  expect(m.handoff!.items.length).toBe(5)
+  expect(m.handoff!.more).toBe(3)
+  const cost = 5 + 2 + m.handoff!.summary.length + 5 + 1
+  const stepLines = m.rows.length
+  expect(cost + stepLines <= 20).toBe(true)
+  expect(m.rows.some(r => r.kind === 'step' && r.isCurrent)).toBe(true)
+  const tight = buildPaneModel(input({ rows: 12, handoff: many }))
+  if (tight.kind !== 'plan') throw new Error(tight.kind)
+  expect(tight.rows.filter(r => r.kind !== 'more').length >= 1).toBe(true)
+  expect(tight.handoff!.summary.length).toBe(1)
+  const compact = buildPaneModel(input({ placement: 'inline', bodyColumns: 44, rows: 30, handoff: many }))
+  if (compact.kind !== 'plan') throw new Error(compact.kind)
+  expect(compact.layout).toBe('compact')
+  const lines = 2 + compact.rows.filter(r => !(r.kind === 'more' && r.position === 'after')).length + 1
+  expect(lines).toBe(8)
+  expect(compact.handoff!.line).toBe('! waiting on you · do 0 (+7)')
+})
+
+test('fitSteps never exceeds its rows; one row is the current step alone, without children', () => {
+  const s = snap(NINE)
+  s.steps[2] = step(2, 'active', [{ text: 'kid', status: 'pending', line: 1 }])
+  for (const layout of ['wide', 'compact'] as const) {
+    for (let r = 1; r <= 12; r++) {
+      const rows = fitSteps(s.steps, 2, r, layout)
+      const drawn = rows.filter((x, i) => layout === 'wide' || !(x.kind === 'more' && x.position === 'after' && rows[i - 1]?.kind === 'step')).length
+      expect({ r, layout, ok: drawn <= r }).toEqual({ r, layout, ok: true })
+      expect(rows.some(x => x.kind === 'step' && x.isCurrent)).toBe(true)
+    }
+  }
+  expect(fitSteps(s.steps, 2, 1, 'wide')).toEqual([{ kind: 'step', step: s.steps[2], isCurrent: true }])
+  expect(kinds(fitSteps(s.steps, 2, 2, 'wide'))).toEqual(['step', 'more'])
+  expect(fitSteps(s.steps, 2, 3, 'wide').some(x => x.kind === 'children')).toBe(false)
+})
+
+test('wide dock, budgets 10..30: model rows ≤ budget; sections degrade gaps → +n more → handoff line → PR line', () => {
+  const s = snap(NINE)
+  s.steps[2] = step(2, 'active', [{ text: 'a', status: 'done', line: 1 }, { text: 'b', status: 'pending', line: 2 }])
+  const ho: Handoff = { ...HANDOFF, summary: `${HANDOFF.summary} ${HANDOFF.summary}`.slice(0, 230) }
+  const e = { id: 'github.com/a/r#1', attention: 'fix-ci', state: 'open' } as unknown as PrEntry
+  const prRows: PrRow[] = [{ glyph: '✗', label: '#1', repoName: 'r', branch: 'b', status: 'ci failed', color: 'error', url: 'https://github.com/a/r/pull/1', id: e.id }]
+  const base = input({ snap: s, handoff: ho, prs: { entries: [e], lastPolledAt: NOW, note: 'gh rate-limited' }, prRows })
+  const full = buildPaneModel({ ...base, rows: 40 })
+  if (full.kind !== 'plan') throw new Error(full.kind)
+  expect(full.handoff!.summary.length).toBe(3)
+  expect(full.handoff!.items.length).toBe(2)
+  const seen = new Set<string>()
+  for (let rows = 10; rows <= 30; rows++) {
+    const m = buildPaneModel({ ...base, rows })
+    if (m.kind !== 'plan') throw new Error(m.kind)
+    expect({ rows, n: paneRows(m) <= rows }).toEqual({ rows, n: true })
+    expect(m.rows.some(r => r.kind === 'step' && r.isCurrent)).toBe(true)
+    expect(m.handoff).not.toBe(null)
+    expect(m.prSection).not.toBe(null)
+    seen.add(`${m.gaps}/${m.handoff!.compact}/${m.prSection!.compact}`)
+  }
+  expect(seen.has('true/false/false')).toBe(true)
+  expect(seen.has('false/false/false')).toBe(true)
+  const ten = buildPaneModel({ ...base, rows: 10 })
+  if (ten.kind !== 'plan') throw new Error(ten.kind)
+  expect([ten.gaps, ten.handoff!.compact, ten.prSection!.compact]).toEqual([false, true, false])
+  const nine = buildPaneModel({ ...base, rows: 9 })
+  if (nine.kind !== 'plan') throw new Error(nine.kind)
+  expect([nine.gaps, nine.handoff!.compact, nine.prSection!.compact]).toEqual([false, true, true])
+  expect(paneRows(nine)).toBe(9)
+  for (let rows = 6; rows <= 9; rows++) {
+    const m = buildPaneModel({ ...base, rows })
+    expect({ rows, n: paneRows(m) <= Math.max(rows, 7) }).toEqual({ rows, n: true })
+  }
+})
+
+test('paneRows counts the non-plan states with their handoff line', () => {
+  const ho: Handoff = { summary: 's', items: [], at: NOW, sessionId: 'S' }
+  expect(paneRows(buildPaneModel(input({ tracked: null, snap: null })))).toBe(2)
+  expect(paneRows(buildPaneModel(input({ tracked: null, snap: null, handoff: ho })))).toBe(3)
+  expect(paneRows(buildPaneModel(input({ snap: snap([], { mode: 'none' }), handoff: ho })))).toBe(4)
 })

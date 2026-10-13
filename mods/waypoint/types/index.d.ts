@@ -85,6 +85,28 @@ export type PrEntry = PrRef &
 export type PrsStore = { version: 1; entries: Record<string, PrEntry> }
 export type PrsView = { entries: PrEntry[]; lastPolledAt: number | null; note: string }
 
+// --- Handoff: the note the model leaves when only the person can move the plan ---
+
+export type HandoffKind = 'decision' | 'action' | 'answer'
+export type HandoffItem = {
+  kind: HandoffKind
+  /** One line: what the person must do, decide or answer. */
+  title: string
+  /** A PR/MR url, `#n`, `!n` or a tracked PR id this item is about, if any. */
+  ref?: string
+  /** True when the plan cannot move until this is resolved. */
+  blocking: boolean
+}
+export type Handoff = {
+  /** 2–4 sentences: where things stand and what happens after the person acts. */
+  summary: string
+  items: HandoffItem[]
+  /** When the model set it (ms). */
+  at: number
+  /** The session that set it. */
+  sessionId: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     waypoint: {
@@ -93,6 +115,7 @@ declare module 'claude-code' {
       ui: WaypointUi
       prs: PrsView
       prsToasted: string[]
+      handoff: Handoff | null
     }
   }
 }
