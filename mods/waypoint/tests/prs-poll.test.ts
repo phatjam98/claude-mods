@@ -15,6 +15,7 @@ import {
   pickDue,
   pollIntervalMs,
   prune,
+  neverConfirmed,
   repoNameOf,
   rowOf,
   sanitizeStore,
@@ -220,4 +221,15 @@ test('sanitizeStore drops entries a row cannot draw and rejects non-stores', () 
   expect(Object.keys(sanitizeStore(v).entries)).toEqual(['a'])
   expect(sanitizeStore({ version: 2, entries: {} })).toEqual(emptyStore())
   expect(sanitizeStore('nope')).toEqual(emptyStore())
+})
+
+test('prune drops an entry never confirmed to exist after 5 failures of any class; keeps a confirmed one', () => {
+  const now = 1_000_000
+  const base = { kind: 'github' as const, host: 'github.example.com', path: 'o/r', number: 13, id: 'github.example.com/o/r#13', state: 'open' as const, draft: false, checks: 'none' as const, review: 'none' as const, mergeable: 'unknown' as const, title: '#13', url: 'https://github.example.com/o/r/pull/13', attention: null, source: 'session' as const, firstSeenAt: now - 1000, lastPolledAt: now - 10 }
+  const debris = { ...base, error: 'other' as const, failures: 5 }
+  const young = { ...base, id: 'y', error: 'other' as const, failures: 4 }
+  const confirmed = { ...base, id: 'c', updatedAt: '2026-10-12T00:00:00Z', error: 'other' as const, failures: 9 }
+  expect(neverConfirmed(debris)).toBe(true)
+  expect(neverConfirmed(confirmed)).toBe(false)
+  expect(Object.keys(prune({ [debris.id]: debris, y: young, c: confirmed }, now)).sort()).toEqual(['c', 'y'])
 })

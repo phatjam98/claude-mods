@@ -125,13 +125,19 @@ function givenUp(e: PrEntry): boolean {
   return e.error === 'not-found' && e.failures >= NOT_FOUND_GIVE_UP
 }
 
+/** Never confirmed to exist (no successful poll yet) and failing on every class: debris. */
+export const NEVER_CONFIRMED_FAILURES = 5
+export function neverConfirmed(e: PrEntry): boolean {
+  return e.updatedAt === undefined && e.failures >= NEVER_CONFIRMED_FAILURES
+}
+
 /**
  * Drop closed entries older than PRUNE_DAYS and given-up not-found entries (any
  * state), then keep at most MAX_ENTRIES (open first, newest first).
  */
 export function prune(entries: Record<string, PrEntry>, now: number): Record<string, PrEntry> {
   const kept = Object.values(entries)
-    .filter((e) => !expired(e, now) && !givenUp(e))
+    .filter((e) => !expired(e, now) && !givenUp(e) && !neverConfirmed(e))
     .sort((a, b) => Number(b.state === 'open') - Number(a.state === 'open') || b.firstSeenAt - a.firstSeenAt)
     .slice(0, MAX_ENTRIES)
   return Object.fromEntries(kept.map((e) => [e.id, e]))
