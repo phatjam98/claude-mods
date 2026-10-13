@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 — 2026-10-13
+
+- Fix: a marked step heading (`### [x] WP1 — …`) directly under a prose section such as `## Context` was treated as prose, so a plan with no `## Work packages` heading fell through to its checkbox lines (`0 of 17`). A marker now always makes the heading a step; only unmarked siblings need a step-like name outside prose.
+
 ## 0.2.0 — 2026-10-13
 
 - Handoff note: the mod registers the tool `mcp__waypoint__handoff`, which the model calls when it stops waiting on you, with a short summary and the decisions, actions or answers it needs (or `clear: true` when work resumes). Toasts on set (and a native notification with `notify` on).
