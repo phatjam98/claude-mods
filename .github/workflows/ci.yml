@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code
+      - run: claude --version
+      - run: claude plugin validate --strict .
+      # If `plugin test` needs auth in Actions, drop the test line below and document tests as local.
+      - name: Validate and test each mod
+        run: |
+          for m in mods/*/; do
+            claude plugin validate --strict "$m"
+            claude plugin test "$m"
+          done

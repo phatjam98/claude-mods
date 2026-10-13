@@ -1,0 +1,19 @@
+{
+  "name": "waypoint",
+  "version": "0.1.0",
+  "description": "Plan pane: the steps the session is working through, and the PRs/MRs that need attention.",
+  "author": { "name": "Travis Carter" },
+  "keywords": ["mods", "plan", "pull-requests", "github", "gitlab"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "openOnStart": { "type": "boolean", "title": "Open pane on start", "description": "Open the plan pane when a plan is found at session start (placed only in wide terminals; the band shows otherwise).", "required": false, "default": true },
+    "band": { "type": "boolean", "title": "Band above prompt", "description": "Draw a one-line plan summary above the prompt while the pane is not placed.", "required": false, "default": true },
+    "statusLine": { "type": "boolean", "title": "Status line", "description": "Pin the current step under the prompt.", "required": false, "default": true },
+    "layout": { "type": "string", "title": "Pane layout", "description": "auto picks compact inline and wide when docked.", "required": false, "default": "auto", "options": ["auto", "compact", "wide"] },
+    "planDir": { "type": "string", "title": "Plan directory", "description": "Where /waypoint use <slug> looks for plan files.", "required": false, "default": "~/.claude/plans" },
+    "planPollSeconds": { "type": "number", "title": "Plan poll (seconds)", "description": "How often the plan file is stat-ed for outside edits; 0 disables.", "required": false, "default": 5 },
+    "resumeDays": { "type": "number", "title": "Resume window (days)", "description": "A plan last touched within this many days comes back in a new session in the same directory.", "required": false, "default": 14 },
+    "pollSeconds": { "type": "number", "title": "PR poll interval (seconds)", "description": "How often tracked PRs/MRs are polled with gh/glab; minimum 30.", "required": false, "default": 120 },
+    "notify": { "type": "boolean", "title": "Native notifications", "description": "Also raise a system notification when a PR/MR starts needing attention (toasts always show).", "required": false, "default": false }
+  }
+}
