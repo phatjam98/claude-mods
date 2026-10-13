@@ -9,6 +9,7 @@ import {
   fitSteps,
   fmtAgo,
   headerLine,
+  MAX_PR_ROWS,
   shorten,
   statusText,
 } from '../hooks/view'
@@ -221,12 +222,40 @@ test('buildPaneModel plan (inline compact): capped at 8 rows, one PR line', () =
   expect(m.prSection?.rows.map(r => [r.label, r.stepShort])).toEqual([['!6402', 'WP4']])
 })
 
+test('buildPaneModel PR section (wide): attention first, other open PRs after, merged/closed hidden, polled + note', () => {
+  const e = (id: string, attention: string | null, state = 'open') => ({ id, attention, state }) as unknown as PrEntry
+  const row = (id: string): PrRow => ({ glyph: '○', label: id, repoName: 'r', branch: 'b', status: 's', color: 'subtle', url: `https://x/${id}`, id })
+  const entries = [e('#1', null), e('#2', 'fix-ci'), e('#3', null, 'merged'), e('#4', null, 'closed'), e('#5', 'address-review')]
+  const prs: PrsView = { entries, lastPolledAt: NOW - 120_000, note: 'gh not logged in — run gh auth login' }
+  const m = buildPaneModel(input({ rows: 40, prs, prRows: entries.map(x => row(x.id)) }))
+  if (m.kind !== 'plan') throw new Error(m.kind)
+  expect(m.prSection).toEqual({
+    count: 2,
+    rows: [expect.objectContaining({ id: '#2' }), expect.objectContaining({ id: '#5' })],
+    others: [expect.objectContaining({ id: '#1' })],
+    polled: '2m ago',
+    note: 'gh not logged in — run gh auth login',
+  })
+  const many = Array.from({ length: 8 }, (_, i) => e(`#${i + 10}`, i % 2 ? 'fix-ci' : null))
+  const capped = buildPaneModel(input({ rows: 40, prs: { ...prs, entries: many }, prRows: many.map(x => row(x.id)) }))
+  if (capped.kind !== 'plan') throw new Error(capped.kind)
+  expect(capped.prSection!.rows.length + capped.prSection!.others.length).toBe(MAX_PR_ROWS)
+  expect(capped.prSection!.rows.map(r => r.id)).toEqual(['#11', '#13', '#15', '#17'])
+  const closedOnly = [e('#3', null, 'merged')]
+  const none = buildPaneModel(input({ prs: { ...prs, entries: closedOnly }, prRows: closedOnly.map(x => row(x.id)) }))
+  if (none.kind !== 'plan') throw new Error(none.kind)
+  expect(none.prSection).toBe(null)
+})
+
 test('buildPaneModel none-tracked: up to 5 recent plans, newest first', () => {
   const recent = [1, 2, 3, 4, 5, 6].map(i => ({ name: `plan-${i}`, path: `/p/plan-${i}.md`, mtimeMs: NOW - i * 3_600_000 }))
   const m = buildPaneModel(input({ tracked: null, snap: null, recent: [...recent].reverse() }))
   if (m.kind !== 'none-tracked') throw new Error(m.kind)
   expect(m.recent.length).toBe(5)
   expect(m.recent[0]).toEqual({ name: 'plan-1', path: '/p/plan-1.md', ago: '1h ago' })
+  expect(m.planDir).toBe('~/.claude/plans')
+  const custom = buildPaneModel(input({ tracked: null, snap: null, planDir: '~/work/plans' }))
+  expect(custom.kind === 'none-tracked' && custom.planDir).toBe('~/work/plans')
 })
 
 test('buildPaneModel planning: in plan mode with nothing tracked, or tracked before the file exists', () => {

@@ -130,7 +130,9 @@ function repoFromFlag(value: string, kind: PrKind, session: RepoRef | null | und
   return { kind, host: defHost, path: segs.join('/') }
 }
 
-function scanSegment(seg: string, session: RepoRef | null | undefined): { scanned: boolean; refs: PrRef[] } {
+type Scan = { scanned: boolean; named: boolean; refs: PrRef[] }
+
+function scanSegment(seg: string, session: RepoRef | null | undefined): Scan {
   const toks = seg.trim().split(/\s+/).map(unquote).filter(Boolean)
   let at = -1
   let kind: PrKind = 'github'
@@ -149,9 +151,12 @@ function scanSegment(seg: string, session: RepoRef | null | undefined): { scanne
       break
     }
   }
-  if (at < 0) return { scanned: false, refs: [] }
+  if (at < 0) return { scanned: false, named: false, refs: [] }
   let repo: RepoRef | undefined = session?.kind === kind ? session : undefined
-  let num: string | undefined
+  // Only the first positional counts, and only if no other flag precedes it:
+  // a flag's value (`--interval 10`, `--body "3 places"`) is never the PR.
+  let positional: string | undefined
+  let done = false
   for (let i = at; i < toks.length; i++) {
     const t = toks[i] ?? ''
     if (t === '--repo' || t === '-R') {
@@ -166,17 +171,26 @@ function scanSegment(seg: string, session: RepoRef | null | undefined): { scanne
       if (r) repo = r
       continue
     }
-    if (num === undefined && /^[#!]?\d+$/.test(t)) num = t.replace(/^[#!]/, '')
+    if (done) continue
+    done = true
+    if (!t.startsWith('-')) positional = t
   }
-  const urls = extractUrls(seg)
-  if (urls.length) return { scanned: true, refs: urls }
-  if (num !== undefined && repo) return { scanned: true, refs: [{ ...repo, number: Number(num) }] }
-  return { scanned: true, refs: [] }
+  if (positional !== undefined) {
+    const urls = extractUrls(positional)
+    if (urls[0]) return { scanned: true, named: true, refs: [urls[0]] }
+    if (/^[#!]?\d+$/.test(positional)) {
+      const refs = repo ? [{ ...repo, number: Number(positional.replace(/^[#!]/, '')) }] : []
+      return { scanned: true, named: true, refs }
+    }
+  }
+  return { scanned: true, named: false, refs: [] }
 }
 
 /**
  * Refs touched by one Bash call: only single-PR `gh pr` / `glab mr` subcommands
- * count; list/search/api calls and anything else yield nothing.
+ * count; list/search/api calls and anything else yield nothing. The output is
+ * read only when a segment named no PR (`create`, bare `view`), and then only
+ * its first PR/MR URL.
  */
 export function discoverFromBash(input: {
   command: string
@@ -184,14 +198,18 @@ export function discoverFromBash(input: {
   repo?: RepoRef | null
 }): PrRef[] {
   const out: PrRef[] = []
-  let scannedAny = false
+  let unnamed = false
   for (const seg of input.command.split(/&&|\|\||;|\||\n/)) {
     const r = scanSegment(seg, input.repo)
     if (!r.scanned) continue
-    scannedAny = true
+    if (!r.named) unnamed = true
     out.push(...r.refs)
   }
-  if (scannedAny && input.text) out.push(...extractUrls(input.text))
+  if (unnamed && input.text) {
+    const have = new Set(out.map(prId))
+    const first = extractUrls(input.text).find((r) => !have.has(prId(r)))
+    if (first) out.push(first)
+  }
   return dedup(out)
 }
 

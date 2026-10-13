@@ -1,7 +1,7 @@
 // WP3 mounts: the pane at 40/80/120 columns on terminal and desktop, special states, the PR section, the band.
 import { test, expect, mock } from 'claude-code/testing'
 import { ZERO_STEPS } from './fixtures'
-import { gh } from './fixtures/prs'
+import { gh, stderr } from './fixtures/prs'
 
 const HOME = '/home/t'
 const PLAN = `${HOME}/.claude/plans/purring-origami.md`
@@ -23,7 +23,7 @@ const NINE = [
   '- run it',
 ].join('\n')
 
-function world(on: any, files: Record<string, string> = {}) {
+function world(on: any, files: Record<string, string> = {}, run?: () => { exitCode: number; stdout: string; stderr: string }) {
   const clock = mock.clock(on, { now: NOW })
   mock.store(on, {})
   const fs: Record<string, string> = { ...files }
@@ -39,7 +39,9 @@ function world(on: any, files: Record<string, string> = {}) {
   on('fs.read', (_: any, e: any) => (e.path in fs ? { value: fs[e.path] } : { deny: 'ENOENT' }))
   on('fs.exists', (_: any, e: any) => ({ value: e.path in fs }))
   on('fs.list', () => ({ value: [] }))
-  on('process.run', () => ({ value: { exitCode: 0, stdout: JSON.stringify(gh.failing), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', () => ({
+    value: { ...(run ? run() : { exitCode: 0, stdout: JSON.stringify(gh.failing), stderr: '' }), isStdoutTruncated: false, isStderrTruncated: false },
+  }))
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -154,6 +156,21 @@ test('PR section: wide lists PRs needing attention; compact shows one line', asy
     await ui.unmount()
     ui = await mountPane($, surface, 40)
     expect(await ui.find({ type: 'Text', text: /1 PR needs you/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('PR section: the header says when it last polled; a poll error note is drawn under it', async ($, on) => {
+  const w = world(on, { [PLAN]: NINE }, () => ({ exitCode: 1, stdout: '', stderr: stderr.ghAuth }))
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await planMode($)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b', command: 'gh pr view 13' } as any)
+  await w.clock.advance(750)
+  await w.clock.advance(120_000)
+  for (const cols of [120, 40]) {
+    const ui = await mountPane($, 'terminal', cols)
+    expect(await ui.find({ type: 'Text', text: /polled 2m ago/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /gh not logged in — run gh auth login/ })).toBeDefined()
     await ui.unmount()
   }
 })

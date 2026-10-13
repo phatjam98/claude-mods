@@ -166,3 +166,28 @@ test('view argv and env per host', () => {
   expect(glabEnv(self)).toEqual({ GITLAB_HOST: 'gitlab.example.com' })
   expect(glabEnv({ ...GL, number: 1 })).toBeUndefined()
 })
+
+test('discoverFromBash: flag values are never the PR number; positional before flags still counts', () => {
+  expect(discoverFromBash({ command: 'gh pr checks --watch --interval 10', repo: GH })).toEqual([])
+  expect(discoverFromBash({ command: 'gh pr comment --body "fixed in 3 places"', repo: GH })).toEqual([])
+  expect(ids(discoverFromBash({ command: 'gh pr view 13 --repo o/r', repo: GH }))).toEqual(['github.com/o/r#13'])
+})
+
+test('discoverFromBash: output URLs only when the command named no PR, and only the first', () => {
+  const other = 'see https://github.com/x/y/pull/99 and https://github.com/o/r/pull/7\n'
+  expect(
+    ids(discoverFromBash({ command: 'gh pr create --fill', text: `https://github.com/o/r/pull/14\n${other}`, repo: GH })),
+  ).toEqual(['github.com/o/r#14'])
+  expect(ids(discoverFromBash({ command: 'gh pr view 5 --comments', text: other, repo: GH }))).toEqual([
+    'github.com/phatjam98/eventhorizon#5',
+  ])
+  expect(
+    ids(
+      discoverFromBash({
+        command: 'glab mr create --fill --yes',
+        text: 'Creating merge request\nhttps://gitlab.com/ecfx/ecfx-backend/-/merge_requests/6680\n',
+        repo: GL,
+      }),
+    ),
+  ).toEqual(['gitlab.com/ecfx/ecfx-backend!6680'])
+})

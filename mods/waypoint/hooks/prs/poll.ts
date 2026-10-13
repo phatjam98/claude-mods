@@ -129,6 +129,27 @@ export function prune(entries: Record<string, PrEntry>, now: number): Record<str
   return Object.fromEntries(kept.map((e) => [e.id, e]))
 }
 
+/**
+ * Another session's unmigrated store, left behind: its newest activity (seen,
+ * polled or closed) is over a day old. A store still in use stays. Empty is stale.
+ */
+export function idleSessionStore(store: PrsStore, now: number): boolean {
+  const all = Object.values(store.entries)
+  const newest = Math.max(0, ...all.map((e) => Math.max(e.firstSeenAt, e.lastPolledAt ?? 0, e.closedAt ?? 0)))
+  return now - newest > DAY_MS
+}
+
+/**
+ * A plan's store nobody needs: no open entry, and the newest entry (seen or
+ * closed) is older than PRUNE_DAYS. An empty store is stale.
+ */
+export function staleStore(store: PrsStore, now: number): boolean {
+  const all = Object.values(store.entries)
+  if (all.some((e) => e.state === 'open')) return false
+  const newest = Math.max(0, ...all.map((e) => Math.max(e.firstSeenAt, e.closedAt ?? 0)))
+  return now - newest > PRUNE_DAYS * DAY_MS
+}
+
 export function fmtDur(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
   if (s < 60) return `${s}s`
@@ -205,6 +226,24 @@ export function toView(store: PrsStore, now: number, note: string): PrsView {
   let last: number | null = null
   for (const e of entries) if (e.lastPolledAt !== null && (last === null || e.lastPolledAt > last)) last = e.lastPolledAt
   return { entries, lastPolledAt: last, note }
+}
+
+const KINDS = new Set(['github', 'gitlab'])
+const STATES = new Set(['open', 'merged', 'closed'])
+
+/** A stored value as a store: not a v1 store → empty; entries missing what rows draw from are dropped. */
+export function sanitizeStore(v: unknown): PrsStore {
+  if (typeof v !== 'object' || v === null) return emptyStore()
+  const s = v as { version?: unknown; entries?: unknown }
+  if (s.version !== 1 || typeof s.entries !== 'object' || s.entries === null) return emptyStore()
+  const entries: Record<string, PrEntry> = {}
+  for (const [k, e] of Object.entries(s.entries as Record<string, unknown>)) {
+    if (typeof e !== 'object' || e === null) continue
+    const x = e as Record<string, unknown>
+    const strings = [x.id, x.path, x.host, x.url].every(f => typeof f === 'string' && f !== '')
+    if (strings && KINDS.has(x.kind as string) && STATES.has(x.state as string)) entries[k] = e as PrEntry
+  }
+  return { version: 1, entries }
 }
 
 export function emptyStore(): PrsStore {

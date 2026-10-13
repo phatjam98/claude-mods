@@ -38,10 +38,14 @@ export type PaneModel =
       header: { title: string; right: string }
       bar: { on: string; off: string }
       rows: Row[]
-      prSection: { count: number; rows: PrLine[] } | null
+      /**
+       * `rows` need attention; `others` (wide only) are the remaining open PRs.
+       * Merged and closed PRs are never listed. `polled` is `2m ago` or null.
+       */
+      prSection: { count: number; rows: PrLine[]; others: PrLine[]; polled: string | null; note: string } | null
       footer: { path: string; readAgo: string; error: string | null }
     }
-  | { kind: 'none-tracked'; recent: RecentRow[] }
+  | { kind: 'none-tracked'; recent: RecentRow[]; planDir: string }
   | { kind: 'planning' }
   | { kind: 'missing'; path: string; lastCounts: PlanCounts | null }
   | { kind: 'no-steps'; title: string; path: string }
@@ -58,6 +62,7 @@ export type PaneInput = {
   now: number
   opts: { layout: Layout }
   recent?: RecentPlan[]
+  planDir?: string
 }
 
 export const MIN_WIDTH = 40
@@ -226,30 +231,43 @@ export function buildPaneModel(input: PaneInput): PaneModel {
       .sort((a, b) => b.mtimeMs - a.mtimeMs)
       .slice(0, MAX_RECENT)
       .map(r => ({ name: r.name || slugOf(r.path), path: r.path, ago: fmtAgo(now, r.mtimeMs) }))
-    return { kind: 'none-tracked', recent }
+    return { kind: 'none-tracked', recent, planDir: input.planDir ?? '~/.claude/plans' }
   }
   if (tracked.missing) return { kind: 'missing', path: tracked.path, lastCounts: snap?.counts ?? null }
   if (snap === null) return { kind: 'planning' }
   if (snap.steps.length === 0) return { kind: 'no-steps', title: snap.displayTitle, path: snap.path }
 
   const width = Math.max(MIN_WIDTH, Math.floor(input.bodyColumns))
-  const layout = chooseLayout(ui.layout !== 'auto' ? ui.layout : input.opts.layout, width, input.placement)
+  const layout = chooseLayout(ui.layout ?? input.opts.layout, width, input.placement)
   const wide = layout === 'wide'
   const budget = input.placement === 'inline' ? Math.min(input.rows, INLINE_ROW_CAP) : input.rows
 
   // Fixed rows: header, bar, and in wide a blank line and the footer.
   const fixed = 2 + (wide ? 2 : 0)
-  let prShown = input.prRows.length === 0 ? 0 : wide ? Math.min(input.prRows.length, MAX_PR_ROWS) : 1
-  const prCost = (shown: number): number => (shown === 0 ? 0 : wide ? 1 + shown : 1)
+  const byId = new Map(input.prs.entries.map(e => [e.id, e]))
+  const open = input.prRows.filter(r => {
+    const st = byId.get(r.id)?.state
+    return st !== 'merged' && st !== 'closed'
+  })
+  const hot = open.filter(r => (byId.get(r.id)?.attention ?? null) !== null)
+  const cold = open.filter(r => (byId.get(r.id)?.attention ?? null) === null)
+  const ordered = [...hot, ...cold]
+  const noteRows = input.prs.note ? 1 : 0
+  let prShown = ordered.length === 0 ? 0 : wide ? Math.min(ordered.length, MAX_PR_ROWS) : 1
+  // Wide: the section head, the note, the rows, and an `other PRs` sub-line when any are shown.
+  const prCost = (shown: number): number =>
+    shown === 0 ? 0 : wide ? 1 + noteRows + shown + (shown > hot.length ? 1 : 0) : 1 + noteRows
   const minSteps = Math.min(snap.steps.length, 3)
   while (wide && prShown > 1 && budget - fixed - prCost(prShown) < minSteps) prShown--
 
   const stepRows = Math.max(1, budget - fixed - prCost(prShown))
   const shortOf = new Map(snap.steps.map(st => [st.id, st.short]))
-  const prRows = (wide ? input.prRows.slice(0, prShown) : pickCompactPr(input.prRows)).map(r => ({
+  const line = (r: PrRow): PrLine => ({
     ...r,
     stepShort: (r.stepId === undefined ? undefined : shortOf.get(r.stepId)) ?? '—',
-  }))
+  })
+  const shown = ordered.slice(0, prShown)
+  const hotIds = new Set(hot.map(r => r.id))
 
   return {
     kind: 'plan',
@@ -258,19 +276,22 @@ export function buildPaneModel(input: PaneInput): PaneModel {
     header: headerLine(snap, width),
     bar: bar(snap.percent, width),
     rows: fitSteps(snap.steps, snap.currentIndex, stepRows, layout),
-    prSection: prShown === 0 ? null : { count: needsYouCount(input.prs), rows: prRows },
+    prSection:
+      prShown === 0
+        ? null
+        : {
+            count: needsYouCount(input.prs),
+            rows: shown.filter(r => hotIds.has(r.id)).map(line),
+            others: shown.filter(r => !hotIds.has(r.id)).map(line),
+            polled: input.prs.lastPolledAt === null ? null : fmtAgo(now, input.prs.lastPolledAt),
+            note: input.prs.note,
+          },
     footer: {
       path: tracked.path,
       readAgo: ui.lastReadAt > 0 ? fmtAgo(now, ui.lastReadAt) : 'not read yet',
       error: ui.lastError,
     },
   }
-}
-
-/** The one PR shown in compact: the first that needs attention, else the first. */
-function pickCompactPr(rows: PrRow[]): PrRow[] {
-  const hot = rows.find(r => r.color === 'error' || r.color === 'warning') ?? rows[0]
-  return hot === undefined ? [] : [hot]
 }
 
 /** `2/5` for the current step's checkbox children, or '' when it has none. */

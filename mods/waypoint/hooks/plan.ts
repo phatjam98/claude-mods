@@ -363,7 +363,8 @@ export function parsePlan(raw: string, opts: { path: string; mtimeMs: number; no
   const steps = withIds(drafts)
   const counts: PlanCounts = { total: steps.length, done: 0, active: 0, blocked: 0, pending: 0, skipped: 0 }
   for (const s of steps) counts[s.status]++
-  const percent = counts.total === 0 ? 0 : Math.round((100 * (counts.done + counts.skipped)) / counts.total)
+  // floor: 100% only when every step is finished (199 of 200 is 99%, not a rounded 100%).
+  const percent = counts.total === 0 ? 0 : Math.floor((100 * (counts.done + counts.skipped)) / counts.total)
   const first = (st: StepStatus): number | null => steps.find(s => s.status === st)?.index ?? null
   const currentIndex = first('active') ?? first('blocked') ?? first('pending')
 

@@ -33,8 +33,10 @@ The pane shows:
 - the plan title and a progress bar with `done of total` and a percentage;
 - the step list, one glyph per step: `✓` done, `▶` in progress, `·` pending, `!` blocked on you, `–` skipped;
 - in the wide layout, the current step's child checkboxes;
-- a "PRs needing attention" section when any tracked PR/MR needs action (failing CI, requested changes, conflicts, ready to merge), with `copy` and `untrack` buttons per row;
-- a footer with the plan path and when it was last read.
+- a "PRs needing attention" section while any tracked PR/MR is open: those needing action (failing CI, requested changes, conflicts, ready to merge) first, then, in the wide layout, the other open ones under "other PRs" (5 rows at most), with `copy` and `untrack` buttons per row. Its header says when PRs were last polled, and a gh/glab error (not logged in, rate-limited, not installed) shows as a note under it. Merged and closed PRs are not listed;
+- in the wide layout, a footer with the plan path, when it was last read, and `refresh` / `path` / `close` buttons (the compact layout has no footer or buttons).
+
+With no plan tracked, `/waypoint` lists up to 5 recent plans from `planDir`, newest first, each with a hotkey `1`–`5` to track it.
 
 When the pane is not placed (narrow terminal, or closed), a one-line band above the prompt carries the summary (for example the current step, steps done, PRs needing you) with an `open` button.
 
@@ -64,15 +66,16 @@ While a plan is tracked, the mod adds a short section to the system prompt askin
 | `/waypoint close` | Close the pane |
 | `/waypoint refresh` | Re-read the plan and poll tracked PRs now |
 | `/waypoint use <path\|slug>` | Track a plan by path, or by slug in `planDir` |
-| `/waypoint track <url\|#n\|!n>` | Track a PR/MR by URL or number |
-| `/waypoint untrack <ref>` | Stop tracking a PR/MR |
+| `/waypoint track <ref>` | Track a PR/MR: a URL, `#n` / `!n` (against this repo), `group/project!n`, or `host/path#n` / `host/path!n` |
+| `/waypoint untrack <ref>` | Stop tracking a PR/MR: any form `track` takes, its label, or its full id (`github.com/o/r#5`) |
 | `/waypoint reset` | Forget the tracked plan |
-| `/waypoint layout auto\|compact\|wide` | Choose the pane layout |
+| `/waypoint layout auto\|compact\|wide` | Choose the pane layout; this choice wins over the `layout` option |
+| `/waypoint layout` | Forget that choice, so the `layout` option applies again |
 | `/waypoint status` | One-line summary |
 
 ## Keys
 
-The pane hotkeys `r` (refresh), `p` (copy path) and `c` (close) work only while the pane is focused (ctrl+x, then tab). The pane opens automatically only at 144 columns or wider; `/waypoint` opens it at any width.
+The pane hotkeys `r` (refresh), `p` (copy path) and `c` (close) exist only in the wide layout, and `1`–`5` (pick a recent plan) only when no plan is tracked. All work only while the pane is focused (ctrl+x, then tab). The pane opens automatically only at 144 columns or wider; `/waypoint` opens it at any width.
 
 ## Configure
 
@@ -92,12 +95,21 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 
 ## What it can reach
 
-- Reads the tracked plan file.
-- Observes Bash tool calls to `gh` and `glab` (the command and its output) to find PR/MR references.
-- Runs read-only `gh pr view --json` and `glab mr view -F json` every `pollSeconds`, using your existing logins.
-- Keeps tracked PR ids, titles and status, and the last plan path, in the plugin store across sessions.
-- Makes no network requests of its own.
-- Never writes to repositories or to the plan file.
+- **Reads** the tracked plan file, and lists `planDir` (default `~/.claude/plans`) for the recent-plans picker and `/waypoint use <slug>`.
+- **Reads** the `HOME` environment variable, to expand `~` in paths.
+- **Reads** the session's git `origin` remote through the engine (`$.session.repo`), only to know which host and repo a bare `#123` / `!123` belongs to.
+- **Observes** Bash tool calls whose command mentions `gh` or `glab`, from the main session and from subagents alike: the command text and its output, to find PR/MR references. It reads nothing from other Bash calls. From the output it takes only the first PR/MR URL, and only when the command named no PR (`gh pr create`, a bare `gh pr view`).
+- **Observes** `Write` and `Edit` calls (main session only), to re-read the plan when its file is the one written.
+- **Observes** `ExitPlanMode` calls (main session only), to pick up the plan file the call names.
+- **Observes** the plan-mode attachments (`plan_mode`, `plan_mode_reentry`, `plan_mode_exit`; main session only), for the plan file path and whether plan mode is on.
+- **Observes** turn completion (main session only), to re-check the plan file's modification time.
+- **Runs** read-only `gh pr view --json` and `glab mr view -F json`, using your existing logins: every `pollSeconds`, 750 ms after a new PR/MR is discovered, and on `/waypoint refresh`.
+- **Adds** a short section to the system prompt while a plan is tracked or in plan mode. It asks the model to keep the step markers current: "A step is a heading whose text starts with a marker: `### [ ] WP1 — Title` pending, `[~]` in progress, `[x]` done, `[!]` blocked on the user", to edit a heading to `[~]` when starting and `[x]` when finished, and to add `- PR: <url>` under a step when it opens a PR.
+- **Writes** to the clipboard only when you press `p` (plan path) or `copy` (PR URL).
+- **Notifies** with native system notifications only when the `notify` option is on; toasts show otherwise.
+- **Stores**, in the plugin's own store: `layout` (your `/waypoint layout` choice); `last:<cwd>` = `{ path, title, at, percent, sessionId }` (to resume the plan in that directory); `waypoint:prs:plan/<plan path>` and `waypoint:prs:session/<session id>` = the tracked PR/MR entries (id, URL, title, branch, state, CI/review/merge status, when seen and polled). Closed PRs older than 7 days are pruned on every write; at session start other sessions' session keys with no activity in the last day, and plan keys with no open PR and nothing newer than 7 days, are deleted.
+- **Sends** nothing itself: it makes no network requests of its own (gh/glab do, with your logins).
+- **Never** writes to repositories or to the plan file.
 
 ## Troubleshooting
 

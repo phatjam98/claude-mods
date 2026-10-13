@@ -116,7 +116,13 @@ test("the waypoint plan's own excerpt: marked@3 with 6 steps", () => {
   expect(p.steps).toHaveLength(6)
   expect(p.steps.map(s => s.status)).toEqual(['done', 'active', 'pending', 'pending', 'active', 'pending'])
   expect(p.currentIndex).toBe(1)
-  expect(p.percent).toBe(17)
+  expect(p.percent).toBe(16) // floor: 1 of 6
+})
+
+test('percent floors: 199 of 200 finished is 99%, never a rounded 100%', () => {
+  const steps = Array.from({ length: 200 }, (_, i) => `### [${i < 199 ? 'x' : ' '}] WP${i} — Step ${i}`)
+  expect(parse(['# P', '', ...steps].join('\n')).percent).toBe(99)
+  expect(parse(['# P', '', ...steps.slice(0, 199)].join('\n')).percent).toBe(100)
 })
 
 test('cleanTitle: trailing link, bold, backticks, bare and auto links', () => {

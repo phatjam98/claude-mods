@@ -42,7 +42,8 @@ export type Layout = 'auto' | 'compact' | 'wide'
 export type WaypointUi = {
   paneOpen: boolean
   isPlaced: boolean
-  layout: Layout
+  /** The `/waypoint layout` choice; null = none stored, the `layout` option applies. */
+  layout: Layout | null
   inPlanMode: boolean
   lastReadAt: number
   lastError: string | null

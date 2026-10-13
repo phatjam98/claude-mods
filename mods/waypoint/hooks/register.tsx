@@ -6,8 +6,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement, RenderInput, RenderSurface } from 'claude-code'
 
 import type { Layout, PlanSnapshot, PlanSource, PrEntry, PrsStore, PrsView, RepoRef, StoredPlan, Tracked, WaypointUi } from '../types'
-import { drawBand, drawPane } from './pane'
-import type { PaneActions } from './pane'
+import { drawBand, drawError, drawPane } from './pane'
+import type { Kit, PaneActions } from './pane'
 import { parsePlan } from './plan'
 import { planSection, SECTION_ID } from './prompt'
 import {
@@ -31,6 +31,9 @@ import {
   resolveManualRef,
   rowOf,
   STAGGER_MS,
+  idleSessionStore,
+  sanitizeStore,
+  staleStore,
   toastsFor,
   toView,
   upsert,
@@ -51,10 +54,11 @@ const LAYOUT_KEY = 'layout'
 const MAX_PLAN_BYTES = 4 * 1024 * 1024
 const CLI_TIMEOUT_MS = 60_000
 const REPO_TTL_MS = 60_000
+const PANE_SYNC_MS = 5_000
 const USAGE =
-  'Usage: /waypoint [close|refresh|use <path|slug>|track <ref>|untrack <ref>|reset|layout <auto|compact|wide>|status]'
+  'Usage: /waypoint [close|refresh|use <path|slug>|track <ref>|untrack <ref>|reset|layout [auto|compact|wide]|status]'
 
-const EMPTY_UI: WaypointUi = { paneOpen: false, isPlaced: false, layout: 'auto', inPlanMode: false, lastReadAt: 0, lastError: null }
+const EMPTY_UI: WaypointUi = { paneOpen: false, isPlaced: false, layout: null, inPlanMode: false, lastReadAt: 0, lastError: null }
 const EMPTY_PRS: PrsView = { entries: [], lastPolledAt: null, note: '' }
 
 const tracked = atom({ plugin: 'waypoint', key: 'tracked' } as const, null as Tracked | null)
@@ -107,6 +111,7 @@ let home: string | null = null
 let planTimer: { cancel: () => void } | undefined
 let prTimer: { cancel: () => void } | undefined
 let kickTimer: { cancel: () => void } | undefined
+let paneTimer: { cancel: () => void } | undefined
 let inflight: Promise<void> | null = null
 let queued: Promise<void> | null = null
 let seen: { path: string; mtimeMs: number } | null = null
@@ -119,6 +124,9 @@ const bg = (p: Promise<unknown>): void => {
   p.catch(() => {})
 }
 const basename = (p: string): string => p.split('/').pop() ?? p
+/** Every step finished (done or skipped); a plan with no steps is never complete. */
+const isComplete = (s: PlanSnapshot): boolean =>
+  s.counts.total > 0 && s.counts.pending + s.counts.active + s.counts.blocked === 0
 const doneOf = (s: PlanSnapshot): string => `${s.counts.done + s.counts.skipped}/${s.counts.total} done`
 
 // --- helpers that touch `$` ----------------------------------------------------
@@ -248,7 +256,7 @@ async function refreshOnce($: EngineInterface, reason: 'event' | 'poll' | 'force
       // resume is best effort
     }
     await setStatus($)
-    if (prevSame && prevSame.percent < 100 && snap.percent >= 100 && snap.counts.total > 0) $.ui.toast('⚑ plan complete')
+    if (prevSame && !isComplete(prevSame) && isComplete(snap)) $.ui.toast('⚑ plan complete')
   } catch {
     // a refresh never breaks the hook that asked for it
   }
@@ -257,7 +265,11 @@ async function refreshOnce($: EngineInterface, reason: 'event' | 'poll' | 'force
 async function planTick($: EngineInterface, gen: number): Promise<void> {
   if (gen !== generation || inflight) return
   if (await read($, tracked)) await refresh($, 'poll')
-  // The pane may be placed later (the terminal widened); the band yields then.
+}
+
+/** The pane may be placed or unplaced later (a resize); the band follows. Runs whatever `planPollSeconds` is. */
+async function paneTick($: EngineInterface, gen: number): Promise<void> {
+  if (gen !== generation) return
   try {
     const u = await read($, ui)
     if (!u.paneOpen) return
@@ -327,7 +339,7 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
   await $.command.register({
     name: 'waypoint',
     description: 'Plan progress pane',
-    argumentHint: '[close|refresh|use <path>|track <ref>|untrack <ref>|reset|layout <auto|compact|wide>|status]',
+    argumentHint: '[close|refresh|use <path>|track <ref>|untrack <ref>|reset|layout [auto|compact|wide]|status]',
   })
   try {
     const l = await $.store.get(LAYOUT_KEY)
@@ -335,6 +347,7 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
   } catch {
     // default layout
   }
+  await prsSweep($)
   // Resume only on a fresh start: after a hot reload the atoms still hold what was tracked.
   let resumed = false
   if (!(await read($, tracked))) {
@@ -363,14 +376,21 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
   planTimer?.cancel()
   prTimer?.cancel()
   kickTimer?.cancel()
-  planTimer = prTimer = kickTimer = undefined
+  paneTimer?.cancel()
+  planTimer = prTimer = kickTimer = paneTimer = undefined
   if (isInteractive) {
     if (cfg.planPollMs > 0) planTimer = $.clock.every(cfg.planPollMs, () => bg(planTick($, gen)))
+    paneTimer = $.clock.every(PANE_SYNC_MS, () => bg(paneTick($, gen)))
     prTimer = $.clock.every(Math.max(15_000, Math.floor(cfg.pollMs / 4)), () => bg(prsTick($, gen)))
     kickoff($)
   }
   lastStatus = null
-  await setStatus($)
+  if (cfg.statusLine) await setStatus($)
+  else {
+    // Clear anything an earlier load (with the option on) left behind; nothing sets text after this.
+    lastStatus = undefined
+    $.ui.status(undefined)
+  }
   if (resumed) await maybeAutoOpen($)
 }
 
@@ -484,7 +504,13 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
         await resetTracking($)
         return 'Waypoint reset: no plan tracked.'
       case 'layout': {
-        if (arg !== 'auto' && arg !== 'compact' && arg !== 'wide') return 'Usage: /waypoint layout <auto|compact|wide>'
+        if (arg === '') {
+          // No argument: forget the stored choice so the `layout` option applies again.
+          await $.store.delete(LAYOUT_KEY)
+          await setUi($, { layout: null })
+          return `Waypoint layout: ${cfg.layout} (from settings).`
+        }
+        if (arg !== 'auto' && arg !== 'compact' && arg !== 'wide') return 'Usage: /waypoint layout [auto|compact|wide]'
         await setUi($, { layout: arg })
         await $.store.set(LAYOUT_KEY, arg)
         return `Waypoint layout: ${arg}.`
@@ -503,8 +529,6 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
 
 const planPrsKey = (path: string): string => `waypoint:prs:plan/${path}`
 const sessionPrsKey = (id: string): string => `waypoint:prs:session/${id}`
-const isStore = (v: unknown): v is PrsStore =>
-  typeof v === 'object' && v !== null && (v as PrsStore).version === 1 && typeof (v as PrsStore).entries === 'object'
 
 async function prsKey($: EngineInterface): Promise<string> {
   const t = await read($, tracked)
@@ -513,18 +537,41 @@ async function prsKey($: EngineInterface): Promise<string> {
 
 async function prsLoad($: EngineInterface, key: string): Promise<PrsStore> {
   try {
-    const v = await $.store.get(key)
-    return isStore(v) ? v : emptyStore()
+    return sanitizeStore(await $.store.get(key))
   } catch {
     return emptyStore()
   }
 }
 
+/** Every PR store write: prune first; an empty store deletes the key instead. Returns what was kept. */
+async function prsSave($: EngineInterface, key: string, store: PrsStore): Promise<PrsStore> {
+  const kept: PrsStore = { ...store, entries: prune(store.entries, await $.clock.now()) }
+  if (Object.keys(kept.entries).length === 0) await $.store.delete(key)
+  else await $.store.set(key, kept)
+  return kept
+}
+
+/** Start of session: drop other sessions' idle unmigrated keys (a running session's stay) and plan stores nobody needs. */
+async function prsSweep($: EngineInterface): Promise<void> {
+  try {
+    const own = sessionPrsKey(await $.session.id())
+    const now = await $.clock.now()
+    for (const k of await $.store.keys()) {
+      if (k.startsWith(sessionPrsKey(''))) {
+        if (k !== own && idleSessionStore(await prsLoad($, k), now)) await $.store.delete(k)
+      }
+      else if (k.startsWith(planPrsKey('')) && staleStore(await prsLoad($, k), now)) await $.store.delete(k)
+    }
+  } catch {
+    // housekeeping is best effort
+  }
+}
+
 /** Write the store (when given) and publish the current key's store into the `prs` atom. */
 async function prsPublish($: EngineInterface, write?: { key: string; store: PrsStore }, note?: string): Promise<void> {
-  if (write) await $.store.set(write.key, write.store)
+  const saved = write ? await prsSave($, write.key, write.store) : undefined
   const key = await prsKey($)
-  const store = write && write.key === key ? write.store : await prsLoad($, key)
+  const store = write && saved && write.key === key ? saved : await prsLoad($, key)
   const now = await $.clock.now()
   await update($, prs, prev => toView(store, now, note ?? prev.note))
 }
@@ -558,7 +605,7 @@ async function prsSetPlanPath($: EngineInterface, path: string | null): Promise<
             ? upsert(merged, e, e.source, now, e.stepId)
             : { ...merged, entries: { ...merged.entries, [e.id]: e } }
         }
-        await $.store.set(pKey, merged)
+        await prsSave($, pKey, merged)
         await $.store.delete(sKey)
       }
     }
@@ -680,7 +727,7 @@ async function prsTick($: EngineInterface, gen: number): Promise<void> {
       const prev = store.entries[entry.id]
       if (!prev) continue
       const next = applyPoll(prev, outcome, now)
-      await $.store.set(key, { ...store, entries: { ...store.entries, [entry.id]: next } })
+      await prsSave($, key, { ...store, entries: { ...store.entries, [entry.id]: next } })
       await showToasts($, toastsFor(prev, next, repoNameOf(next)), true)
       if (outcome.ok) {
         anyOk = true
@@ -693,11 +740,8 @@ async function prsTick($: EngineInterface, gen: number): Promise<void> {
         }
       }
     }
-    const now = await $.clock.now()
-    const store = await prsLoad($, key)
-    const pruned = { ...store, entries: prune(store.entries, now) }
     const prevNote = (await read($, prs)).note
-    await prsPublish($, { key, store: pruned }, note ?? (anyOk ? '' : prevNote))
+    await prsPublish($, { key, store: await prsLoad($, key) }, note ?? (anyOk ? '' : prevNote))
   } catch {
     // polling is best effort
   } finally {
@@ -784,6 +828,15 @@ function makeActions($: EngineInterface): PaneActions {
 
 async function paneHook($: EngineInterface, e: RenderInput<'Pane'>): Promise<RenderElement> {
   const el = $.ui.resolve(e)
+  try {
+    return await paneBody($, e, el)
+  } catch (err) {
+    // A throw here would close the pane: draw the error instead.
+    return drawError(el, `waypoint: ${String((err as Error)?.message ?? err)}`)
+  }
+}
+
+async function paneBody($: EngineInterface, e: RenderInput<'Pane'>, el: Kit): Promise<RenderElement> {
   const t = await read($, tracked)
   const s = await read($, plan)
   const u = await read($, ui)
@@ -801,6 +854,7 @@ async function paneHook($: EngineInterface, e: RenderInput<'Pane'>): Promise<Ren
     now,
     opts: { layout: cfg.layout },
     recent: recentPlans,
+    planDir: cfg.planDir,
   })
   return drawPane(el, e, model, makeActions($))
 }

@@ -255,6 +255,25 @@ test('/waypoint layout persists; status summarises; unknown is usage', async ($,
   expect((await command($, 'layout sideways')).text).toContain('Usage: /waypoint layout')
   expect((await command($, 'status')).text).toBe('waypoint: no plan tracked')
   expect((await command($, 'frobnicate')).text).toMatch(/^Usage: \/waypoint \[close\|refresh/)
+  expect((await command($, 'layout')).text).toBe('Waypoint layout: auto (from settings).')
+  expect('layout' in w.store).toBe(false)
+})
+
+test('a stored layout wins over the option; /waypoint layout with no argument hands back to it', { options: { layout: 'compact' } }, async ($, on) => {
+  const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  await command($, 'use purring-origami')
+  const hasFooter = async () => {
+    const ui = await $.ui.mount({ plugin: 'waypoint', surface: 'terminal', component: 'Pane', requestId: 'waypoint', props: { bodyColumns: 120, placement: 'dock' } as any })
+    const found = (await ui.find({ type: 'Button', key: 'refresh' })) !== undefined // the footer is wide-only
+    await ui.unmount()
+    return found
+  }
+  expect(await hasFooter()).toBe(false)
+  await command($, 'layout auto')
+  expect(await hasFooter()).toBe(true)
+  expect((await command($, 'layout')).text).toBe('Waypoint layout: compact (from settings).')
+  expect('layout' in w.store).toBe(false)
+  expect(await hasFooter()).toBe(false)
 })
 
 test('/waypoint with nothing tracked lists recent plans and opens the pane', async ($, on) => {
@@ -307,6 +326,71 @@ test('crossing to 100% toasts plan complete once', async ($, on) => {
   expect(last(w.statuses)).toBe('⚑ 9/9 ✓')
 })
 
+test('199 of 200 steps is 99% and no plan-complete toast; the 200th toasts', async ($, on) => {
+  const big = (done: number) => `# P\n\n${steps(done, done < 200 ? done : null, 200)}`
+  const w = world(on, { files: { [PLAN]: { text: big(198), mtimeMs: NOW - 1000 } } })
+  await planMode($)
+  w.write(PLAN, big(199))
+  await edit($, PLAN)
+  expect(w.toasts).toEqual([])
+  expect(last(w.statuses)).toBe('⚑ 199/200 WP199')
+  w.write(PLAN, big(200))
+  await edit($, PLAN)
+  expect(w.toasts).toEqual(['⚑ plan complete'])
+})
+
+test('Write on the tracked path re-parses; a subagent write does not', async ($, on) => {
+  const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW - 1000 } } })
+  await planMode($)
+  w.write(PLAN, planText(4, 4))
+  await $.tool.call({ tool: 'Write', tool_use_id: 'w1', file_path: PLAN, content: 'x', agentId: 'sub' } as any)
+  expect(w.reads).toHaveLength(1)
+  await $.tool.call({ tool: 'Write', tool_use_id: 'w2', file_path: PLAN, content: 'x' } as any)
+  expect(w.reads).toHaveLength(2)
+  expect(last(w.statuses)).toBe('⚑ 4/9 WP4')
+})
+
+test('plan_mode_reentry tracks the plan like plan_mode', async ($, on) => {
+  const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  await attach($, 'plan_mode_reentry', { planFilePath: PLAN })
+  expect(w.reads).toEqual([PLAN])
+  expect((await compose($)).sections.map((x: any) => x.id)).toContain('waypoint:plan')
+})
+
+// The test engine in 2.1.296 has no `$.ui.close` to raise a person's close, so the
+// close goes through the pane's own button (`$.ui.close` from the plugin, the same hook).
+test('closing the pane brings the band back', async ($, on) => {
+  world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  on('ui.render', () => ({ type: 'Text', props: {}, children: [] })) // what draws when the band yields
+  await command($, 'use purring-origami')
+  const band = async () => {
+    const ui = await $.ui.mount({ plugin: 'waypoint', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 100 } as any })
+    const found = (await ui.find({ type: 'Text', text: /WP3 of 9/ })) !== undefined
+    await ui.unmount()
+    return found
+  }
+  expect(await band()).toBe(false) // the placed pane hides the band
+  const pane = await $.ui.mount({ plugin: 'waypoint', surface: 'terminal', component: 'Pane', requestId: 'waypoint', props: { bodyColumns: 120, placement: 'dock' } as any })
+  await pane.press({ key: 'close' })
+  await pane.unmount()
+  expect(await band()).toBe(true)
+})
+
+test('tool.call hooks return exactly what the call resolved', async ($, on) => {
+  const stub = { ref: 7, result: { filePath: PLAN, extra: [1, 2] }, text: 'stub text' }
+  world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } }, toolResult: () => structuredClone(stub) })
+  await start($)
+  await command($, 'use purring-origami')
+  for (const call of [
+    { tool: 'Bash', tool_use_id: 'b', command: 'gh pr view 13' },
+    { tool: 'Edit', tool_use_id: 'e', file_path: PLAN, old_string: 'a', new_string: 'b' },
+    { tool: 'Write', tool_use_id: 'w', file_path: PLAN, content: 'x' },
+    { tool: 'ExitPlanMode', tool_use_id: 'x' },
+  ]) {
+    expect(await $.tool.call(call as any)).toEqual(stub)
+  }
+})
+
 test('a vanished plan file is marked missing', async ($, on) => {
   const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
   await command($, 'use purring-origami')
@@ -314,11 +398,12 @@ test('a vanished plan file is marked missing', async ($, on) => {
   expect((await command($, 'refresh')).text).toBe(`Plan file missing: ${PLAN}`)
 })
 
-test('statusLine off: the status line is never set', { options: { statusLine: false } }, async ($, on) => {
+test('statusLine off: the status line is cleared once at start and never set to text', { options: { statusLine: false } }, async ($, on) => {
   const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } } })
+  await start($)
   await planMode($)
   await command($, 'reset')
-  expect(w.statuses).toEqual([])
+  expect(w.statuses).toEqual([undefined])
 })
 
 test('openOnStart off: a resumed plan does not open the pane', { options: { openOnStart: false } }, async ($, on) => {

@@ -38,7 +38,7 @@ export function drawPane(kit: Kit, _e: PaneEvent, model: PaneModel, actions: Pan
     return (
       <Box flexDirection="column">
         <Text wrap={T}>No plan tracked. Enter plan mode, or pick a recent plan:</Text>
-        {model.recent.length === 0 && <Text dimColor wrap={T}>No plans found in ~/.claude/plans.</Text>}
+        {model.recent.length === 0 && <Text dimColor wrap={T}>No plans found in {model.planDir}.</Text>}
         {model.recent.map((r, i) => (
           <Box key={`recent-${r.path}`} flexDirection="row">
             <Button key={`pick-${r.path}`} label={`${r.name} · ${r.ago}`} hotkey={String(i + 1)} plain onPress={p => actions.pick(r.path, p)} />
@@ -99,27 +99,45 @@ export function drawPane(kit: Kit, _e: PaneEvent, model: PaneModel, actions: Pan
   })
 
   if (model.prSection !== null) {
-    const { count, rows: prs } = model.prSection
+    const { count, rows: hot, others, polled, note } = model.prSection
+    const polledPart = polled === null ? '' : ` · polled ${polled}`
+    const noteLine =
+      note === '' ? null : (
+        <Box key="prs-note" flexDirection="row">
+          <Text color="warning" dimColor wrap={T}>{wide ? '  ' : ''}⚠ {note}</Text>
+        </Box>
+      )
     if (wide) {
-      const head = `── PRs needing attention (${count}) `
+      const head = `── PRs needing attention (${count})${polledPart} `
       lines.push(
         <Box key="prs-head" flexDirection="row">
           <Text dimColor wrap={T}>{head + '─'.repeat(Math.max(0, model.width - head.length))}</Text>
         </Box>,
       )
-      for (const pr of prs) lines.push(drawPrWide(kit, pr, actions))
+      if (noteLine !== null) lines.push(noteLine)
+      for (const pr of hot) lines.push(drawPrWide(kit, pr, actions))
+      if (others.length > 0) {
+        lines.push(
+          <Box key="prs-others" flexDirection="row">
+            <Text dimColor wrap={T}>  other PRs</Text>
+          </Box>,
+        )
+        for (const pr of others) lines.push(drawPrWide(kit, pr, actions))
+      }
     } else {
-      const pr = prs[0]
+      const pr = hot[0] ?? others[0]
       if (pr !== undefined) {
         const lead = count > 0 ? `${count} PR${count === 1 ? ' needs' : 's need'} you` : 'PRs tracked'
         lines.push(
           <Box key={`pr-${pr.id}`} flexDirection="row">
-            <Text color={pr.color} wrap={T}>{pr.glyph} {lead} · </Text>
+            <Text color={pr.color} dimColor={pr.color === undefined} wrap={T}>{pr.glyph} {lead} · </Text>
             <Link href={pr.url} label={pr.label} />
-            <Text color={pr.color} wrap={T}> {pr.status}</Text>
+            <Text color={pr.color} dimColor={pr.color === undefined} wrap={T}> {pr.status}</Text>
+            {polledPart !== '' && <Text dimColor wrap={T}>{polledPart}</Text>}
           </Box>,
         )
       }
+      if (noteLine !== null) lines.push(noteLine)
     }
   }
 
@@ -142,6 +160,16 @@ export function drawPane(kit: Kit, _e: PaneEvent, model: PaneModel, actions: Pan
   }
 
   return <Box flexDirection="column">{lines}</Box>
+}
+
+/** One line in place of the pane when building it failed. */
+export function drawError(kit: Kit, text: string): RenderElement {
+  const { Box, Text } = kit
+  return (
+    <Box flexDirection="column">
+      <Text color="warning" wrap={T}>⚠ {text}</Text>
+    </Box>
+  )
 }
 
 export function drawBand(kit: Kit, _e: BandEvent, model: BandModel, actions: PaneActions): RenderElement {
@@ -225,13 +253,13 @@ function drawPrWide(kit: Kit, pr: PrLine, actions: PaneActions): RenderElement {
   return (
     <Box key={`pr-${pr.id}`} flexDirection="row" justifyContent="space-between">
       <Box flexDirection="row" gap={2}>
-        <Text color={pr.color}>  {pr.glyph}</Text>
+        <Text color={pr.color} dimColor={pr.color === undefined}>  {pr.glyph}</Text>
         <Link href={pr.url} label={pr.label} />
         <Text dimColor>{pr.stepShort}</Text>
         <Text wrap={T}>{shorten(pr.branch || pr.repoName, 32)}</Text>
       </Box>
       <Box flexDirection="row" gap={2}>
-        <Text color={pr.color}>{pr.status}</Text>
+        <Text color={pr.color} dimColor={pr.color === undefined}>{pr.status}</Text>
         <Button key={`copy-${pr.id}`} label="copy" plain dimColor onPress={p => actions.copyUrl(pr.url, p)} />
         <Button key={`untrack-${pr.id}`} label="untrack" plain dimColor onPress={p => actions.untrack(pr.id, p)} />
       </Box>

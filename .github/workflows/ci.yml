@@ -13,9 +13,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install -g @anthropic-ai/claude-code
+      # Pinned: the engine API the mods compile against. Bump on purpose, with the mods' `Requirements`.
+      - run: npm install -g @anthropic-ai/claude-code@2.1.296
       - run: claude --version
       - run: claude plugin validate --strict .
+      # tsc runs locally only: `.claude-plugin/types/` (the engine's typings) is gitignored and laid
+      # by a mod's first interactive load, so CI has no types to compile against.
       # If `plugin test` needs auth in Actions, drop the test line below and document tests as local.
       - name: Validate and test each mod
         run: |

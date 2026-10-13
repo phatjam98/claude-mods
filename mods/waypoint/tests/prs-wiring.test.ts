@@ -37,6 +37,7 @@ function world(on: any, opts: { run?: (argv: string[]) => Run; repo?: boolean; f
     delete store[e.key]
     return { value: undefined }
   })
+  on('store.keys', () => ({ value: Object.keys(store) }))
   on('fs.stat', (_: any, e: any) => {
     const f = files[e.path]
     return f ? { value: { kind: 'file', size: f.text.length, mtimeMs: f.mtimeMs, isLink: false } } : { deny: 'ENOENT' }
@@ -194,7 +195,7 @@ test('/waypoint track and untrack', async ($, on) => {
   expect(await command($, 'track https://gitlab.com/ecfx/ecfx-backend/-/merge_requests/6677')).toBe('Tracking !6677 (ecfx/ecfx-backend).')
   expect(await command($, 'untrack #21')).toBe('Untracked #21 (phatjam98/eventhorizon).')
   expect(await command($, 'untrack !6677')).toBe('Untracked !6677 (ecfx/ecfx-backend).')
-  expect(Object.keys(w.store[SESSION_KEY].entries)).toEqual([])
+  expect(w.store[SESSION_KEY]).toBeUndefined() // an empty store is deleted, never written
   expect(await command($, 'untrack #99')).toBe('Not tracked: #99')
 })
 
@@ -211,4 +212,52 @@ test('non-interactive sessions never poll', async ($, on) => {
   await w.clock.advance(300_000)
   expect(w.runs).toHaveLength(0)
   expect(w.store[SESSION_KEY].entries[PR13]).toBeDefined()
+})
+
+const DAY = 86_400_000
+/** A complete stored entry for PR `n` (the store drops entries missing what rows draw from). */
+const full = (n: number, state: 'open' | 'merged' | 'closed', at: number) => ({
+  kind: 'github', host: 'github.com', path: 'phatjam98/eventhorizon', number: n,
+  id: `github.com/phatjam98/eventhorizon#${n}`, state, draft: false, checks: 'none', review: 'none', mergeable: 'unknown',
+  title: `#${n}`, url: `https://github.com/phatjam98/eventhorizon/pull/${n}`, attention: null, source: 'session',
+  firstSeenAt: at, lastPolledAt: null as number | null, failures: 0, ...(state === 'open' ? {} : { closedAt: at }),
+})
+const storeOf = (...es: ReturnType<typeof full>[]) => ({ version: 1, entries: Object.fromEntries(es.map(e => [e.id, e])) })
+
+test('session start sweeps idle session keys and stale plan stores; keeps live ones', async ($, on) => {
+  const w = world(on)
+  w.store['waypoint:prs:session/IDLE'] = storeOf(full(1, 'open', NOW - 2 * DAY))
+  w.store['waypoint:prs:session/RUNNING'] = storeOf({ ...full(1, 'open', NOW - 3 * DAY), lastPolledAt: NOW - 60_000 })
+  w.store[SESSION_KEY] = storeOf(full(1, 'open', NOW))
+  w.store['waypoint:prs:plan/old.md'] = storeOf(full(2, 'merged', NOW - 8 * DAY))
+  w.store['waypoint:prs:plan/recent.md'] = storeOf(full(3, 'merged', NOW - 2 * DAY))
+  w.store['waypoint:prs:plan/open.md'] = storeOf(full(4, 'open', NOW - 30 * DAY))
+  w.store['waypoint:prs:plan/corrupt.md'] = { version: 1, entries: { x: { id: 'x', state: 'open' } } }
+  w.store['layout'] = 'wide'
+  await start($)
+  expect(Object.keys(w.store).sort()).toEqual([
+    'layout',
+    'waypoint:prs:plan/open.md',
+    'waypoint:prs:plan/recent.md',
+    'waypoint:prs:session/RUNNING', // a concurrent session's PRs, polled a minute ago, stay
+    SESSION_KEY,
+  ])
+})
+
+test('every PR store write prunes: a closed entry older than 7 days goes on the next discovery', async ($, on) => {
+  const w = world(on)
+  w.store[SESSION_KEY] = storeOf(full(2, 'merged', NOW - 8 * DAY), full(3, 'merged', NOW - DAY))
+  await start($)
+  await w.bash($, 'gh pr view 13', '')
+  expect(Object.keys(w.store[SESSION_KEY].entries).sort()).toEqual(['github.com/phatjam98/eventhorizon#13', 'github.com/phatjam98/eventhorizon#3'])
+})
+
+test('discovery false positives: flag values and other PR URLs in the output are not tracked', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await w.bash($, 'gh pr checks --watch --interval 10', '')
+  await w.bash($, 'gh pr comment --body "fixed in 3 places"', '')
+  expect(w.store[SESSION_KEY]).toBeUndefined()
+  await w.bash($, 'gh pr view 5 --comments', 'see https://github.com/x/y/pull/99 and https://github.com/o/r/pull/7')
+  expect(Object.keys(w.store[SESSION_KEY].entries)).toEqual(['github.com/phatjam98/eventhorizon#5'])
 })

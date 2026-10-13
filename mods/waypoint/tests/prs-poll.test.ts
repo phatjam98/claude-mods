@@ -17,6 +17,7 @@ import {
   prune,
   repoNameOf,
   rowOf,
+  sanitizeStore,
   toastsFor,
   toView,
   upsert,
@@ -201,4 +202,12 @@ test('rowOf builds pane data; errors show ⚠ class', () => {
   })
   expect(rowOf(applyPoll(e, { ok: false, error: 'auth' }, 4000), 5000).status).toBe('⚠ auth')
   expect(repoNameOf({ path: 'ecfx/sub/ecfx-backend' })).toBe('ecfx-backend')
+})
+
+test('sanitizeStore drops entries a row cannot draw and rejects non-stores', () => {
+  const good = { id: 'h/p#1', kind: 'github', state: 'open', host: 'h', path: 'p', url: 'https://h/p/pull/1' }
+  const v = { version: 1, entries: { a: good, b: { ...good, path: undefined }, c: { ...good, kind: 'bitbucket' }, d: { ...good, state: 'gone' }, e: null } }
+  expect(Object.keys(sanitizeStore(v).entries)).toEqual(['a'])
+  expect(sanitizeStore({ version: 2, entries: {} })).toEqual(emptyStore())
+  expect(sanitizeStore('nope')).toEqual(emptyStore())
 })
