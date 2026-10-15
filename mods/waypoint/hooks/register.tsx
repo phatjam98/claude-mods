@@ -23,6 +23,7 @@ import {
 import type { Kit, PaneActions } from './pane'
 import { parsePlan, planTitle } from './plan'
 import { earlierHandoffSection, HANDOFF_SECTION_ID, planSection, SECTION_ID } from './prompt'
+import { conformInstruction, findingsKey, lintPlan, lintText, PLAN_STYLE_GUIDE, writeNote } from './style'
 import {
   applyPoll,
   dropPlanRefsNotIn,
@@ -68,8 +69,11 @@ const MAX_PLAN_BYTES = 4 * 1024 * 1024
 const CLI_TIMEOUT_MS = 60_000
 const REPO_TTL_MS = 60_000
 const PANE_SYNC_MS = 5_000
-const USAGE =
-  'Usage: /waypoint [close|refresh|use <path|slug|n>|track <ref>|untrack <ref>|handoff [clear]|reset|layout [auto|compact|wide]|status]'
+const SUBCOMMANDS =
+  '[close|refresh|use <path|slug|n>|track <ref>|untrack <ref>|handoff [clear]|lint [path|slug|n]|conform [rewrite] [path|slug|n]|reset|layout [auto|compact|wide]|status]'
+const USAGE = `Usage: /waypoint ${SUBCOMMANDS}`
+/** The style guide's own heading: an attachment already carrying it is not given it twice. */
+const STYLE_MARK = '# Waypoint: plan style'
 
 const EMPTY_UI: WaypointUi = { paneOpen: false, isPlaced: false, layout: null, inPlanMode: false, lastReadAt: 0, lastError: null }
 const EMPTY_PRS: PrsView = { entries: [], lastPolledAt: null, note: '' }
@@ -80,6 +84,8 @@ const ui = atom({ plugin: 'waypoint', key: 'ui' } as const, EMPTY_UI)
 const prs = atom({ plugin: 'waypoint', key: 'prs' } as const, EMPTY_PRS)
 const prsToasted = atom({ plugin: 'waypoint', key: 'prsToasted' } as const, [] as string[])
 const handoff = atom({ plugin: 'waypoint', key: 'handoff' } as const, null as Handoff | null)
+/** Plan file (absolute path) → findingsKey of the last lint note left after a write, so an identical note is not repeated. */
+const lintNoted = atom({ plugin: 'waypoint', key: 'lintNoted' } as const, {} as Record<string, string>)
 
 type Cfg = {
   openOnStart: boolean
@@ -93,6 +99,8 @@ type Cfg = {
   resumeDays: number
   pollMs: number
   notify: boolean
+  /** Append the plan style guide to the plan-mode reminder and lint plan files after a write. */
+  styleGuide: boolean
 }
 
 const bool = (v: unknown, d: boolean): boolean => (typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : d)
@@ -121,6 +129,7 @@ export function parseOptions(o: Record<string, unknown>): Cfg {
     resumeDays: Math.max(0, num(o.resumeDays, 14)),
     pollMs: pollIntervalMs(o.pollSeconds),
     notify: bool(o.notify, false),
+    styleGuide: bool(o.styleGuide, true),
   }
 }
 
@@ -144,6 +153,10 @@ let ticking = false
 let recentPlans: RecentPlan[] = []
 /** The last Pane render's placement and body width; module memory, since render hooks never write state. */
 let lastPaneDraw: PaneDraw | null = null
+/** A `/waypoint conform` instruction not yet handed to the session; the next prompt carries it if the submit failed. */
+let pendingConform: { text: string; at: number } | null = null
+/** A pending conform instruction older than this is dropped, not attached to a prompt. */
+const PENDING_CONFORM_MS = 10 * 60_000
 
 const bg = (p: Promise<unknown>): void => {
   p.catch(() => {})
@@ -153,6 +166,25 @@ const basename = (p: string): string => p.split('/').pop() ?? p
 const isComplete = (s: PlanSnapshot): boolean =>
   s.counts.total > 0 && s.counts.pending + s.counts.active + s.counts.blocked === 0
 const doneOf = (s: PlanSnapshot): string => `${s.counts.done + s.counts.skipped}/${s.counts.total} done`
+
+/** A command's answer: shown text, plus hidden notes the model reads after it. */
+type CommandReply = { text: string; context?: string[] }
+
+/** The full plan-mode reminder with the plan style guide appended; any other text as it came. Never null. */
+function withStyleGuide<R extends { text: string | null }>(r: R): R {
+  if (typeof r.text !== 'string' || r.text.trim() === '' || r.text.includes(STYLE_MARK)) return r
+  return { ...r, text: `${r.text}\n\n${PLAN_STYLE_GUIDE}` }
+}
+
+/** `planDir` as an absolute path: `~` expanded, a relative one taken from the home dir. */
+const planDirAbs = (planDir: string, home: string): string => {
+  const d = expandHome(planDir, home)
+  return normalizePath(d.startsWith('/') || home === '' ? d : `${home}/${d}`)
+}
+
+/** `abs` is a `.md` file inside `dir` (both normalized absolute paths). */
+const isPlanDirPath = (abs: string, dir: string): boolean =>
+  abs.startsWith('/') && /\.md$/i.test(abs) && abs.startsWith(dir === '/' ? '/' : `${dir}/`)
 
 // --- helpers that touch `$` ----------------------------------------------------
 
@@ -432,7 +464,7 @@ async function startSession($: EngineInterface, cwd: string, isInteractive: bool
   await $.command.register({
     name: 'waypoint',
     description: 'Plan progress pane',
-    argumentHint: '[close|refresh|use <path|slug|n>|track <ref>|untrack <ref>|handoff [clear]|reset|layout [auto|compact|wide]|status]',
+    argumentHint: SUBCOMMANDS,
   })
   await registerHandoffTool($)
   try {
@@ -536,6 +568,61 @@ async function isTrackedPath($: EngineInterface, path: string | undefined): Prom
   return t !== null && samePath(path, t.path, await homeDir($))
 }
 
+/** `stat`'s `realPath` (every link followed), or undefined when the kit gives none or the path leads nowhere. */
+async function realPathOf($: EngineInterface, path: string): Promise<string | undefined> {
+  try {
+    const r = (await $.fs.stat(path, { resolve: true })).realPath
+    return r ? normalizePath(r) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The absolute path of `path` when it is a `.md` file under `planDir`, else null. `planDir` is
+ * `~`-expanded, and a relative one resolved against the home dir. A spelling outside it may still land
+ * inside through a link: then the plan dir's and the file's real paths are compared too.
+ */
+async function planDirFile($: EngineInterface, path: string | undefined): Promise<string | null> {
+  if (!path || !/\.md$/i.test(path)) return null
+  const h = await homeDir($)
+  const abs = normalizePath(expandHome(path, h))
+  const dir = planDirAbs(cfg.planDir, h)
+  if (isPlanDirPath(abs, dir)) return abs
+  if (!abs.startsWith('/')) return null
+  const realDir = await realPathOf($, dir)
+  if (realDir === undefined) return null
+  if (isPlanDirPath(abs, realDir)) return abs
+  const realFile = await realPathOf($, abs)
+  return realFile !== undefined && isPlanDirPath(realFile, realDir) ? abs : null
+}
+
+/**
+ * After the main session's `Write`/`Edit` of a plan file under `planDir`: lint the file as written and,
+ * when the findings changed since the last note for it, add a note to the result's hidden context.
+ * Never changes the result otherwise; any failure returns it as it came.
+ */
+async function lintAfterWrite<R>($: EngineInterface, e: { agentId?: string; file_path?: string }, ran: R, kind: 'write' | 'edit'): Promise<R> {
+  try {
+    const r = ran as { deny?: string; isError?: boolean; context?: readonly string[] }
+    if (e.agentId || !cfg.styleGuide || r.deny || r.isError) return ran
+    const abs = await planDirFile($, e.file_path)
+    if (!abs) return ran
+    if ((await $.fs.stat(abs)).size > MAX_PLAN_BYTES) return ran
+    const report = lintPlan(await $.fs.read(abs))
+    const key = findingsKey(report)
+    if ((await read($, lintNoted))[abs] === key) return ran
+    const note = writeNote(report, { file: basename(abs), kind, inPlanMode: (await read($, ui)).inPlanMode })
+    // A clean plan records its key; an edit leaving only nits records nothing, so a later write still names them.
+    if (!note && report.findings.length > 0) return ran
+    await update($, lintNoted, m => ({ ...m, [abs]: key }))
+    if (!note) return ran
+    return { ...ran, context: [...(r.context ?? []), note] } as R
+  } catch {
+    return ran
+  }
+}
+
 async function onTurnComplete($: EngineInterface): Promise<void> {
   if (await read($, tracked)) await refresh($, 'event')
 }
@@ -579,7 +666,94 @@ async function paneStatus($: EngineInterface): Promise<string> {
   return paneStatusLine(lastPaneDraw, isPlaced, cfg.paneColumns)
 }
 
-async function runCommand($: EngineInterface, args: string): Promise<string> {
+/** `lint`/`conform` target: a picker number, slug or path as `use` takes it (not tracked), else the tracked plan. */
+async function styleTarget($: EngineInterface, arg: string): Promise<{ path: string } | { text: string }> {
+  if (arg) {
+    const picked = /^[1-9]\d*$/.test(arg) ? (await listRecent($))[Number(arg) - 1] : undefined
+    return { path: picked?.path ?? resolveUseArg(arg, await $.session.cwd(), cfg.planDir, await homeDir($)) }
+  }
+  const t = await read($, tracked)
+  return t ? { path: t.path } : { text: `No plan tracked.\n${await pickerReply($)}` }
+}
+
+/** Read and lint a plan file for a command; a reply text when it cannot be read. */
+async function lintTarget(
+  $: EngineInterface,
+  arg: string,
+): Promise<{ path: string; title: string; report: ReturnType<typeof lintPlan> } | { text: string }> {
+  const target = await styleTarget($, arg)
+  if ('text' in target) return target
+  const path = target.path
+  let size: number
+  try {
+    size = (await $.fs.stat(path)).size
+  } catch {
+    return { text: `No plan file at ${path}.` }
+  }
+  if (size > MAX_PLAN_BYTES) return { text: `Plan file over 4 MiB: ${basename(path)}.` }
+  const raw = await $.fs.read(path)
+  const s = await read($, plan)
+  const title = (s && samePath(s.path, path) ? s.displayTitle : planTitle(raw)?.displayTitle) || basename(path)
+  return { path, title, report: lintPlan(raw) }
+}
+
+async function conformCommand($: EngineInterface, arg: string): Promise<CommandReply> {
+  const [first = '', ...more] = arg.split(/\s+/)
+  const rewrite = first === 'rewrite'
+  pendingConform = null
+  const r = await lintTarget($, rewrite ? more.join(' ') : arg)
+  if ('text' in r) return { text: r.text }
+  const file = basename(r.path)
+  if (r.report.findings.length === 0 && !rewrite) return { text: `${r.title} (${file}): looks fine, nothing to conform.` }
+  // A submitted text may not begin with `/` (it would run as a command), so it gets a lead line of its own.
+  const instruction = `The person ran /waypoint conform${rewrite ? ' rewrite' : ''}; please carry it out.\n${conformInstruction(r.report, { path: r.path, title: r.title, rewrite })}`
+  // The engine refuses a submit from inside a command hook (it would wait on the turn the hook holds),
+  // so it is made from a timer once this command has answered.
+  $.clock.after(0, () => bg(deliverConform($, instruction)))
+  return {
+    text: `Asked this session to apply the plan style guide to "${r.title}" (${file}) ${rewrite ? 'with heading rewrites' : 'additively'}; it starts when the session is idle and shows the diff.`,
+  }
+}
+
+/** Take the pending conform instruction (it goes once); null when none, or older than 10 minutes (dropped). */
+async function takePendingConform($: EngineInterface): Promise<string | null> {
+  const p = pendingConform
+  pendingConform = null
+  if (p === null) return null
+  try {
+    return (await $.clock.now()) - p.at > PENDING_CONFORM_MS ? null : p.text
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Submit the conform instruction as this plugin's prompt, a turn of its own once the session is idle.
+ * On failure it stays pending: a toast says so and it rides with the person's next prompt as context.
+ */
+async function deliverConform($: EngineInterface, instruction: string): Promise<void> {
+  let why: string | null = null
+  try {
+    const r = await $.prompt.submit({ text: instruction })
+    if ('drop' in r && r.drop) why = `dropped: ${r.drop}`
+    else pendingConform = null
+  } catch (err) {
+    why = String((err as Error)?.message ?? err)
+  }
+  if (why === null) return
+  try {
+    pendingConform = { text: instruction, at: await $.clock.now() }
+  } catch {
+    pendingConform = null
+  }
+  try {
+    $.ui.toast(`waypoint: could not hand the conform instruction to the session (${why}); it goes with your next prompt.`, { timeoutMs: 8000 })
+  } catch {
+    // cosmetic
+  }
+}
+
+async function runCommand($: EngineInterface, args: string): Promise<string | CommandReply> {
   const [sub = '', ...rest] = args.trim().split(/\s+/)
   const arg = rest.join(' ')
   try {
@@ -631,6 +805,12 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
           return had ? 'Handoff note cleared.' : 'No handoff note.'
         }
         return 'Usage: /waypoint handoff [clear]'
+      case 'lint': {
+        const r = await lintTarget($, arg)
+        return 'text' in r ? r.text : lintText(r.report, { title: r.title, file: basename(r.path) })
+      }
+      case 'conform':
+        return await conformCommand($, arg)
       case 'reset':
         await resetTracking($)
         return 'Waypoint reset: no plan tracked.'
@@ -647,7 +827,7 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
         return `Waypoint layout: ${arg}.`
       }
       case 'status':
-        return `${await summary($)}\n${await paneStatus($)}`
+        return `${await summary($)}\n${await paneStatus($)}\nstyle guide: ${cfg.styleGuide ? 'on' : 'off'}`
       default:
         return USAGE
     }
@@ -1175,7 +1355,9 @@ export const register: Register = (on, options) => {
 
   on('prompt.attachment', { type: 'plan_mode' }, async ($, e, next) => {
     if (!e.agentId) await onPlanModeAttachment($, e.detail?.planFilePath, e.detail?.hasPlan === true)
-    return next(e)
+    const r = await next(e)
+    // Only the full reminder carries the guide; the sparse one leans on the prompt section's short rules.
+    return !e.agentId && cfg.styleGuide && e.detail?.reminder === 'full' ? withStyleGuide(r) : r
   })
 
   on('prompt.attachment', { type: 'plan_mode_reentry' }, async ($, e, next) => {
@@ -1204,7 +1386,7 @@ export const register: Register = (on, options) => {
     } catch {
       // observe only
     }
-    return ran
+    return lintAfterWrite($, e, ran, 'write')
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
@@ -1214,7 +1396,7 @@ export const register: Register = (on, options) => {
     } catch {
       // observe only
     }
-    return ran
+    return lintAfterWrite($, e, ran, 'edit')
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
@@ -1240,6 +1422,13 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // Adds context only: a conform instruction whose own submit failed rides with the next prompt.
+  on('prompt.submit', async ($, e, next) => {
+    if (pendingConform === null || e.origin?.kind === 'plugin') return next(e)
+    const pending = await takePendingConform($)
+    return pending === null ? next(e) : next({ ...e, context: [...(e.context ?? []), pending] })
+  }).catch(($, e, next) => next(e))
+
   on('prompt.compose', async ($, e, next) => {
     const r = await next(e)
     try {
@@ -1250,7 +1439,10 @@ export const register: Register = (on, options) => {
     }
   })
 
-  on('command.run', { command: 'waypoint' }, async ($, e) => ({ text: await runCommand($, e.args ?? '') }))
+  on('command.run', { command: 'waypoint' }, async ($, e) => {
+    const r = await runCommand($, e.args ?? '')
+    return typeof r === 'string' ? { text: r } : r
+  })
 
   on('ui.close', { id: PANE_ID }, async ($, e, next) => {
     const r = await next(e)

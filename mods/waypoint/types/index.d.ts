@@ -116,6 +116,8 @@ declare module 'claude-code' {
       prs: PrsView
       prsToasted: string[]
       handoff: Handoff | null
+      /** Plan file (absolute path) → key of the findings in the last lint note left after a write. */
+      lintNoted: Record<string, string>
     }
   }
 }

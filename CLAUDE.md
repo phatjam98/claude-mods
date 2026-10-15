@@ -23,7 +23,7 @@ Conventions for this repo, a Claude Code plugin marketplace of mods.
 - Pure logic goes in `hooks/<area>/*.ts` and never takes `$`.
 - Every function that touches `$` is declared top-level in `hooks/register.tsx`. The validator attributes `$` calls only to top-level functions there.
 - `hooks/register.tsx` is the only file that calls `on()`.
-- Hooks observe only. Never deny or rewrite a tool call, prompt or attachment, unless the mod's README says it is a guard.
+- Hooks observe only. Never deny or rewrite a tool call, prompt or attachment, unless the mod's README says it is a guard. A hook may append advisory text the model reads: to an attachment (`next(e)` first, then add to its text), as hidden context after a tool result, or from a command. It never drops an attachment, changes a tool's input, or changes what a tool writes.
 - Wrap every `$.process.run` so it never throws. Run read-only CLIs only.
 - Render hooks do no I/O and never write state; they read atoms and draw a precomputed model.
 - Tests import `{ test, expect, mock }` from `claude-code/testing`.

@@ -1,5 +1,9 @@
 # Changelog
 
+## waypoint 0.3.0 — 2026-10-15
+
+Plan Style Guide: appended to the plan-mode reminder, a lint note after a plan file is written, and `/waypoint lint` and `/waypoint conform`.
+
 ## waypoint 0.2.2 — 2026-10-13
 
 Fix: the plan is re-read after a plugin reload, so a parser change shows without an edit to the file.
