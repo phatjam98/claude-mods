@@ -7,7 +7,7 @@
       "name": "waypoint",
       "source": "./mods/waypoint",
       "description": "Draws the plan the session is working through as a pane, with the PRs/MRs it touches and what each needs (CI, review, conflicts, merge).",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "keywords": ["mods", "plan", "pull-requests", "github", "gitlab"]
     }
   ]

@@ -108,7 +108,7 @@ const start = ($: any, isInteractive = true) => $.session.start({ cwd: '/work', 
 const turnDone = ($: any) => $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
 const last = <T>(xs: T[]): T | undefined => xs[xs.length - 1]
 
-test('plan_mode attachment tracks and parses the plan; the attachment text is unchanged', async ($, on) => {
+test('plan_mode attachment tracks and parses the plan; the attachment text is unchanged', { options: { styleGuide: false } }, async ($, on) => {
   const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW - 1000 } } })
   const r = await planMode($)
   expect(r.text).toBe('plan mode reminder')
@@ -124,7 +124,7 @@ test('a subagent plan_mode attachment is ignored', async ($, on) => {
   expect((await command($, 'status')).text.split('\n')[0]).toBe('waypoint: no plan tracked')
 })
 
-test('Edit on the tracked path re-parses; another path, a subagent edit and a failed edit do not', async ($, on) => {
+test('Edit on the tracked path re-parses; another path, a subagent edit and a failed edit do not', { options: { styleGuide: false } }, async ($, on) => {
   let fail = false
   const w = world(on, {
     files: { [PLAN]: { text: planText(), mtimeMs: NOW - 1000 } },
@@ -380,7 +380,7 @@ test('199 of 200 steps is 99% and no plan-complete toast; the 200th toasts', asy
   expect(w.toasts).toEqual(['⚑ plan complete'])
 })
 
-test('Write on the tracked path re-parses; a subagent write does not', async ($, on) => {
+test('Write on the tracked path re-parses; a subagent write does not', { options: { styleGuide: false } }, async ($, on) => {
   const w = world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW - 1000 } } })
   await planMode($)
   w.write(PLAN, planText(4, 4))
@@ -417,7 +417,7 @@ test('closing the pane brings the band back', async ($, on) => {
   expect(await band()).toBe(true)
 })
 
-test('tool.call hooks return exactly what the call resolved', async ($, on) => {
+test('tool.call hooks return exactly what the call resolved', { options: { styleGuide: false } }, async ($, on) => {
   const stub = { ref: 7, result: { filePath: PLAN, extra: [1, 2] }, text: 'stub text' }
   world(on, { files: { [PLAN]: { text: planText(), mtimeMs: NOW } }, toolResult: () => structuredClone(stub) })
   await start($)
@@ -482,7 +482,7 @@ test('paneColumns is clamped to 40..200 whole columns', { options: { paneColumns
 
 test('/waypoint status: `pane: not placed` before the pane is drawn', async ($, on) => {
   world(on)
-  expect((await command($, 'status')).text).toBe('waypoint: no plan tracked\npane: not placed')
+  expect((await command($, 'status')).text).toBe('waypoint: no plan tracked\npane: not placed\nstyle guide: on')
 })
 
 test('/waypoint status reports where the pane was drawn and the width asked', async ($, on) => {
@@ -496,7 +496,7 @@ test('/waypoint status reports where the pane was drawn and the width asked', as
     props: { bodyColumns: 76, placement: 'dock', scroll: { bodyRows: 30 } } as any,
   })
   const lines = (await command($, 'status')).text.split('\n')
-  expect(lines).toHaveLength(2)
+  expect(lines).toHaveLength(3)
   expect(lines[1]).toBe('pane: dock · 76 columns (asked 48)')
   await ui.unmount()
 })

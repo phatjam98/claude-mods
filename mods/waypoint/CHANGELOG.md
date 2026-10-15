@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-10-15
+
+- Plan Style Guide (`PLAN-STYLE.md`): a one-page skeleton and four rules for writing a plan, applied in four places. Of 21 plans checked, 19 had no status markers and the parser fell back to guessing.
+- Plan mode: the guide is appended to the engine's full plan-mode reminder (first request of a planning session and after a compaction, not the sparse repeats), so the model sees it while writing a plan and nowhere else; the one-paragraph rules ride in the compose section meanwhile.
+- After the model writes or edits a file under the plan directory, waypoint lints it and leaves a short hidden note the model reads: what the parser saw and what to fix. Nits are reported after a full write, only fix-level problems after an edit, and an identical note is not repeated. After an edit outside plan mode the note is a pointer, not an order. What was written is never changed.
+- `/waypoint lint [path|slug|n]` prints the report for the tracked plan, or the named one.
+- `/waypoint conform [rewrite] [path|slug|n]` submits an instruction as a prompt from the plugin (shown in the transcript); once the session is idle the model applies the guide with the Edit tool and shows the diff. If the submit fails, it rides along with the next prompt. Additive by default (markers on existing step headings, a `## Steps` section when there are none, no prose deleted or reordered, title unchanged); `rewrite` may also reshape headings and move checkbox lines under steps.
+- New option `styleGuide` (default on) gates the plan-mode text and the lint note; the commands always work.
+- No parser change: plans already tracked keep their snapshots.
+
 ## 0.2.2 — 2026-10-13
 
 - Fix: a forced re-read (`/waypoint refresh`, and now every plugin reload) always re-parses the plan. Before, it returned early when the file's content hash was unchanged, so a parser change never showed until the file was edited. The hash now carries a parser version too.

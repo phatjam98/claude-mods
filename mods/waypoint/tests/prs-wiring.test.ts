@@ -116,7 +116,7 @@ test('a failing PR becomes fix-ci with exactly one toast across polls', async ($
   await w.clock.settle()
   expect(views(w)).toHaveLength(2)
   expect(w.toasts).toEqual(['waypoint: #13 CI failed · eventhorizon'])
-  expect(await command($, 'status')).toBe('waypoint: no plan tracked\npane: not placed')
+  expect(await command($, 'status')).toBe('waypoint: no plan tracked\npane: not placed\nstyle guide: on')
 })
 
 test('notify on: a new attention also raises a native notification', { options: { notify: true } }, async ($, on) => {

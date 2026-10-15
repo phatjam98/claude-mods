@@ -1,6 +1,6 @@
 {
   "name": "waypoint",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Plan pane: the steps the session is working through, and the PRs/MRs that need attention.",
   "author": { "name": "Travis Carter" },
   "keywords": ["mods", "plan", "pull-requests", "github", "gitlab"],
@@ -15,6 +15,7 @@
     "planPollSeconds": { "type": "number", "title": "Plan poll (seconds)", "description": "How often the plan file is stat-ed for outside edits; 0 disables.", "required": false, "default": 5 },
     "resumeDays": { "type": "number", "title": "Resume window (days)", "description": "A plan last touched within this many days comes back in a new session in the same directory.", "required": false, "default": 14 },
     "pollSeconds": { "type": "number", "title": "PR poll interval (seconds)", "description": "How often tracked PRs/MRs are polled with gh/glab; minimum 30.", "required": false, "default": 120 },
-    "notify": { "type": "boolean", "title": "Native notifications", "description": "Also raise a system notification when a PR/MR starts needing attention or the model leaves a handoff note (toasts always show).", "required": false, "default": false }
+    "notify": { "type": "boolean", "title": "Native notifications", "description": "Also raise a system notification when a PR/MR starts needing attention or the model leaves a handoff note (toasts always show).", "required": false, "default": false },
+    "styleGuide": { "type": "boolean", "title": "Plan style guide", "description": "Append the plan style guide to the plan-mode reminder and leave a lint note after a plan file is written. /waypoint lint and conform work either way.", "required": false, "default": true }
   }
 }

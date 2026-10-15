@@ -127,6 +127,10 @@ While a plan is tracked, the mod adds a short section to the system prompt askin
 
 PR/MR links are read from a step in two ways: any full PR/MR URL anywhere in the step, and short refs (`#13`, `!6677`, `group/project!6677`, against this repo) only on a `- PR: <url or #n>` / `- MR: …` line under the step, or as a markdown link target (`[fix](#13)`). A bare `#123` in prose is ignored.
 
+## Plan style
+
+Of 21 plans on one machine, 19 had no status markers, so the parser had to guess. waypoint ships a one-page [Plan Style Guide](PLAN-STYLE.md) (a skeleton, four rules, the lint codes) and applies it in four places: appended to the engine's full plan-mode reminder (not the sparse repeats), as a lint note after a plan file is written, in `/waypoint lint`, and in `/waypoint conform`. The `styleGuide` option gates the first two; the commands always work.
+
 ## Handoff: when the session waits on you
 
 When the model stops because only you can move the plan (a decision, a merge, a credential, an answer), the system-prompt section asks it to call the tool `mcp__waypoint__handoff` first, with a 2–4 sentence summary of where things stand and one item per thing you must do, decide or answer (`decision`, `action` or `answer`; `blocking` when the plan cannot move without it; an optional PR/MR `ref`). The note shows in the pane as "Waiting on you", in the band and on the status line, and raises a toast (and a native notification with `notify` on). When work resumes the model calls the tool with `clear: true`, or replaces the note. An input with neither a summary nor an item comes back to the model as an error. `/waypoint handoff` prints it and `/waypoint handoff clear` clears it yourself.
@@ -145,6 +149,8 @@ The note is kept per plan: it comes back when a later session resumes the same p
 | `/waypoint untrack <ref>` | Stop tracking a PR/MR: any form `track` takes, its label, or its full id (`github.com/o/r#5`) |
 | `/waypoint handoff` | Print the model's current "waiting on you" note |
 | `/waypoint handoff clear` | Clear that note |
+| `/waypoint lint [path\|slug\|n]` | Print the style report for the tracked plan, or the named one: what the parser saw and what to fix |
+| `/waypoint conform [rewrite] [path\|slug\|n]` | Submit an instruction as a prompt from the waypoint plugin (shown in the transcript as its message); once the session is idle the model applies the style guide to the plan with the Edit tool and shows the diff. If the submit fails, the instruction rides along with your next prompt. Additive by default; `rewrite` may also reshape headings and move checkbox lines under steps |
 | `/waypoint reset` | Forget the tracked plan and its handoff note |
 | `/waypoint layout auto\|compact\|wide` | Choose the pane layout; this choice wins over the `layout` option |
 | `/waypoint layout` | Forget that choice, so the `layout` option applies again |
@@ -170,25 +176,28 @@ Set these in `/config`, or under `pluginConfigs["waypoint"].options` in `setting
 | `resumeDays` | `14` | A plan last touched within this many days comes back in a new session in the same directory |
 | `pollSeconds` | `120` | How often tracked PRs/MRs are polled with gh/glab; minimum 30 |
 | `notify` | `false` | Also raise a system notification when a PR/MR starts needing attention or the model leaves a handoff note (toasts always show) |
+| `styleGuide` | `true` | Append the plan style guide to the plan-mode reminder and leave a lint note after a plan file is written (`/waypoint lint` and `conform` work either way) |
 
 ## What it can reach
 
-- **Reads** the tracked plan file, and lists `planDir` (default `~/.claude/plans`) for the recent-plans picker and `/waypoint use <slug>`. For the picker it also reads the 5 newest plan files there (for their titles) and its own `last:<cwd>` records (for their progress and folder), only when no plan is tracked or on `/waypoint use`.
+- **Reads** the tracked plan file, and lists `planDir` (default `~/.claude/plans`) for the recent-plans picker and `/waypoint use <slug>`. For the picker it also reads the 5 newest plan files there (for their titles) and its own `last:<cwd>` records (for their progress and folder), only when no plan is tracked or on `/waypoint use`. It also reads any `.md` under `planDir` right after a main-session `Write` or `Edit` of it (to lint it), and the plan file named to `/waypoint lint` or `conform`.
 - **Reads** the `HOME` environment variable, to expand `~` in paths.
 - **Reads** the session's git `origin` remote through the engine (`$.session.repo`), only to know which host and repo a short `#123` / `!123` (on a `- PR:` line, in `/waypoint track`, or in a `gh pr` / `glab mr` command) belongs to.
 - **Observes** Bash tool calls whose command mentions `gh` or `glab`, from the main session and from subagents alike: the command text and its output, to find PR/MR references. It reads nothing from other Bash calls. From the output it takes only the first PR/MR URL, and only when the command named no PR (`gh pr create`, a bare `gh pr view`). A `--repo` / `-R` value or PR number carrying quotes, commas, `$` or braces (a `gh` call quoted inside a script) is ignored.
-- **Observes** `Write` and `Edit` calls (main session only), to re-read the plan when its file is the one written.
+- **Observes** `Write` and `Edit` calls (main session only), to re-read the plan when its file is the one written. A write or edit of a file under `planDir` is also linted and may leave a hidden note.
 - **Observes** `ExitPlanMode` calls (main session only), to pick up the plan file the call names.
 - **Observes** the plan-mode attachments (`plan_mode`, `plan_mode_reentry`, `plan_mode_exit`; main session only), for the plan file path and whether plan mode is on.
 - **Observes** turn completion (main session only), to re-check the plan file's modification time.
+- **Observes** prompt submissions (main session only), solely to attach a `/waypoint conform` instruction as hidden context once, when the plugin's own submit of it failed. It never reads or changes what you typed.
 - **Runs** read-only `gh pr view --json` and `glab mr view -F json`, using your existing logins: every `pollSeconds`, 750 ms after a new PR/MR is discovered, and on `/waypoint refresh`.
 - **Registers** one tool, `mcp__waypoint__handoff`, which the model calls to leave (or clear) the "waiting on you" note. The tool only records what the model passes it (a summary, up to 10 items, control characters stripped, at most 1200 + 10 × (200 + 500) characters: a 200-character title and a 500-character ref per item); it runs nothing and reads nothing.
 - **Adds** a short section to the system prompt while a plan is tracked or in plan mode. It asks the model to keep the step markers current: "A step is a heading whose text starts with a marker: `### [ ] WP1 — Title` pending, `[~]` in progress, `[x]` done, `[!]` blocked on the user", to edit a heading to `[~]` when starting and `[x]` when finished, to add `- PR: <url>` under a step when it opens a PR, and to call `mcp__waypoint__handoff` when it stops waiting on you (and with `clear: true` when it resumes). While a handoff note from an earlier session is showing, a second section (`waypoint:handoff`) quotes the first 120 characters of its summary and asks the model to clear or replace it once you have acted.
+- **Appends** advisory text the model reads, never changing what a tool writes: the plan style guide on the engine's full plan-mode reminder (the one sent on the first request of a planning session and after a compaction, not the sparse repeats; a one-paragraph version of the rules rides in the compose section the rest of the time), a hidden note after a `Write` or `Edit` to a file under `planDir` (a lint report: what the parser saw and what to fix), and, separately, the instruction `/waypoint conform` submits as a prompt from the plugin (visible in the transcript, not hidden context; if the submit fails it rides along with your next prompt). After an edit outside plan mode the lint note is a pointer, not an order: it says the shape may be intentional and names `/waypoint conform`. The first two are gated by `styleGuide`. Linting reads the plan file just written; any edit comes from the model's own Edit tool.
 - **Writes** to the clipboard only when you press `p` (plan path) or `copy` (PR URL).
 - **Notifies** with native system notifications only when the `notify` option is on (a PR/MR starting to need attention, a new handoff note); toasts show otherwise.
 - **Stores**, in the plugin's own store: `layout` (your `/waypoint layout` choice); `last:<cwd>` = `{ path, title, at, percent, sessionId }` (to resume the plan in that directory); `waypoint:prs:plan/<plan path>` and `waypoint:prs:session/<session id>` = the tracked PR/MR entries (id, URL, title, branch, state, CI/review/merge status, when seen and polled). Closed PRs older than 7 days, and PRs/MRs the CLI reported not found three polls running, are pruned on every write and at session start; also at session start other sessions' session keys with no activity in the last day, and plan keys with no open PR and nothing newer than 7 days, are deleted. `waypoint:handoff:plan/<plan path>` and `waypoint:handoff:session/<session id>` = the handoff note (`{ summary, items, at, sessionId }`), the session key folded into the plan key when a plan becomes tracked; notes older than 30 days, and other sessions' session-key notes older than a day, are deleted at session start (never the current session's), and `/waypoint reset` deletes the current one.
 - **Sends** nothing itself: it makes no network requests of its own (gh/glab do, with your logins).
-- **Never** writes to repositories or to the plan file.
+- **Never** writes to repositories or to the plan file itself, and never changes a tool's input or what it writes.
 
 ## Troubleshooting
 
